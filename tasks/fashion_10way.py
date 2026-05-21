@@ -1,0 +1,61 @@
+"""Task 3: Fashion-MNIST 10-way classification."""
+import numpy as np
+import torch.nn as nn
+from torch.utils.data import TensorDataset
+from torchvision import datasets
+from sklearn.model_selection import train_test_split
+
+from .base import Task
+from ._shared import SUPERVISED_CATS
+
+
+def _load_fashion_flat(data_dir):
+    ds_train = datasets.FashionMNIST(data_dir, train=True,  download=True)
+    ds_test  = datasets.FashionMNIST(data_dir, train=False, download=True)
+    train_x = ds_train.data.float().view(-1, 784) / 255.0
+    train_y = ds_train.targets.long()
+    test_x  = ds_test.data.float().view(-1, 784) / 255.0
+    test_y  = ds_test.targets.long()
+    return train_x, train_y, test_x, test_y
+
+
+class Fashion10WayTask(Task):
+    name              = "fashion_10way"
+    paradigm          = "supervised"
+    input_size        = 784
+    output_size       = 10
+    n_steps           = None
+    hidden_size_range = (4, 1024)
+    success_threshold = 0.85
+    metric_name       = "val_acc"
+
+    def get_data(self, data_dir="data", seed=42):
+        train_x, train_y, _, _ = _load_fashion_flat(data_dir)
+        idx = np.arange(len(train_y))
+        idx_train, idx_val = train_test_split(
+            idx, test_size=0.125, stratify=train_y.numpy(), random_state=seed
+        )
+        ds_train = TensorDataset(train_x[idx_train], train_y[idx_train])
+        ds_val   = TensorDataset(train_x[idx_val],   train_y[idx_val])
+        return ds_train, ds_val
+
+    def get_rdm_stimuli(self, data_dir="data", seed=42):
+        """100 stimuli: 10 exemplars × 10 classes."""
+        _, _, test_x, test_y = _load_fashion_flat(data_dir)
+        rng = np.random.default_rng(seed)
+        inputs_list, class_list = [], []
+        for c in range(10):
+            idx = np.where(test_y.numpy() == c)[0]
+            chosen = rng.choice(idx, size=10, replace=False)
+            for i in chosen:
+                inputs_list.append(test_x[i].numpy())
+                class_list.append(c)
+        inputs   = np.stack(inputs_list).astype(np.float32)
+        metadata = {"classes": np.array(class_list, dtype=np.int32)}
+        return inputs, metadata
+
+    def categorical_space(self):
+        return SUPERVISED_CATS
+
+    def make_loss(self):
+        return nn.CrossEntropyLoss()

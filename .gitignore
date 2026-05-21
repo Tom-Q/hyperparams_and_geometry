@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+**/__pycache__/
+*.py[cod]
+data/
+experiments/
+experiments_test/
+rdm_stimuli.npz
+*.npz
+*.npy
