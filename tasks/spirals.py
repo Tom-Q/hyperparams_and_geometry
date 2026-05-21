@@ -12,7 +12,7 @@ N_VAL          = 600
 N_PER_ARM      = 66     # 3 × 66 = 198 stimuli (evenly balanced across arms)
 
 
-def _generate_spirals(n_per_class, noise=0.5, seed=0):
+def _generate_spirals(n_per_class, noise=0.1, seed=0):
     """3-arm Archimedean spirals in 2D. Returns x: (N,2), y: (N,) int64."""
     rng = np.random.default_rng(seed)
     xs, ys = [], []
@@ -50,9 +50,10 @@ class SpiralsTask(Task):
     input_size        = 2
     output_size       = 3
     n_steps           = None
-    hidden_size_range = (4, 64)
+    hidden_size_range = (4, 128)
     success_threshold = 0.85
     metric_name       = "val_acc"
+    max_epochs        = 300
 
     def get_data(self, data_dir="data", seed=42):
         x_train, y_train = _generate_spirals(N_TRAIN // 3, seed=seed)

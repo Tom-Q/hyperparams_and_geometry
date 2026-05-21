@@ -32,7 +32,7 @@ def _evaluate(model, loader, criterion, device, multiclass=False):
 
 
 def train_network(task, config, run_dir, rdm_inputs, ds_train=None, ds_val=None,
-                  device=None, max_epochs_override=None):
+                  device=None, max_epochs_override=None, verbose=False):
     """Train one RNN. Returns metric value (float)."""
     run_dir = Path(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -43,7 +43,7 @@ def train_network(task, config, run_dir, rdm_inputs, ds_train=None, ds_val=None,
     if ds_train is None or ds_val is None:
         ds_train, ds_val = task.get_data(data_dir="data")
 
-    max_epochs = max_epochs_override if max_epochs_override is not None else MAX_EPOCHS
+    max_epochs = max_epochs_override if max_epochs_override is not None else (task.max_epochs or MAX_EPOCHS)
 
     batch_size   = config["batch_size"]
     train_loader = make_loader(ds_train, batch_size=batch_size, shuffle=True)
@@ -75,8 +75,9 @@ def train_network(task, config, run_dir, rdm_inputs, ds_train=None, ds_val=None,
 
     global_step   = 0
     best_val_loss = float("inf")
+    best_val_acc  = 0.0
+    best_val_mse  = float("inf")
     no_improve    = 0
-    final_metric  = 0.0
 
     for epoch in range(max_epochs):
         model.train()
@@ -101,8 +102,14 @@ def train_network(task, config, run_dir, rdm_inputs, ds_train=None, ds_val=None,
 
         epoch_loss /= len(ds_train)
         val_loss, val_acc = _evaluate(model, val_loader, criterion, device, multiclass)
-        # For MSE tasks return val_loss directly; run_task.py negates it for the BO.
-        final_metric = val_loss if use_mse else val_acc
+        # Track best metric seen so far (val_loss for MSE tasks, val_acc otherwise).
+        if use_mse:
+            best_val_mse = min(best_val_mse, val_loss)
+        else:
+            best_val_acc = max(best_val_acc, val_acc)
+        if verbose:
+            metric_str = f"val_mse={val_loss:.4f}" if use_mse else f"val_acc={val_acc:.4f}  val_loss={val_loss:.4f}"
+            print(f"  epoch {epoch+1:3d}  {metric_str}", flush=True)
 
         curve_steps.append(global_step)
         curve_train_loss.append(epoch_loss)
@@ -131,4 +138,4 @@ def train_network(task, config, run_dir, rdm_inputs, ds_train=None, ds_val=None,
     with open(run_dir / "config.json", "w") as f:
         json.dump(dict(config), f, indent=2)
 
-    return float(final_metric)
+    return float(best_val_mse if use_mse else best_val_acc)

@@ -38,7 +38,7 @@ def _eval_mean_return(model, env_factory, n_episodes, device):
 
 
 def train_network(task, config, run_dir, rdm_inputs, env_factory,
-                  device=None, max_steps_override=None):
+                  device=None, max_steps_override=None, verbose=False):
     """Online Q-learning. Returns mean_return (float)."""
     run_dir = Path(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -116,6 +116,10 @@ def train_network(task, config, run_dir, rdm_inputs, env_factory,
                 final_return = mean_ret
                 curve_steps.append(global_step)
                 curve_returns.append(mean_ret)
+                if verbose:
+                    tag = "  *** SOLVED ***" if mean_ret >= task.success_threshold else ""
+                    print(f"  ep {episode_count:6d}  step {global_step:8,}  "
+                          f"mean_return={mean_ret:7.2f}{tag}", flush=True)
                 if mean_ret >= task.success_threshold:
                     break
         else:

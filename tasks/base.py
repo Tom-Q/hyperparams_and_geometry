@@ -13,6 +13,7 @@ class Task(ABC):
     metric_name: str            # "val_acc" | "mean_return" | "val_mse"
     rdm_time_indices: list | None = None   # time steps to save for RNN tasks
     max_steps: int | None = None           # max env steps for RL tasks
+    max_epochs: int | None = None          # per-task override for supervised/RNN
 
     @abstractmethod
     def get_data(self, data_dir: str, seed: int = 42):
