@@ -8,9 +8,8 @@ from sklearn.model_selection import train_test_split
 from .base import Task
 from ._shared import RNN_CATS
 
-ROWS_PER_STEP = 4
-N_STEPS       = 7       # 7 × 4 = 28 rows
-INPUT_SIZE    = ROWS_PER_STEP * 28   # 112
+N_STEPS    = 28   # one row per step
+INPUT_SIZE = 28   # one pixel per column
 
 
 def _mnist_to_sequences(data_dir):
@@ -32,7 +31,7 @@ class MNISTRNNTask(Task):
     hidden_size_range = (16, 512)
     success_threshold = 0.90
     metric_name       = "val_acc"
-    rdm_time_indices  = None   # save all 7 steps
+    rdm_time_indices  = [0, 5, 11, 17, 22, 27]   # 6 evenly spaced rows out of 28
 
     def get_data(self, data_dir="data", seed=42):
         train_x, train_y, _, _ = _mnist_to_sequences(data_dir)
@@ -45,7 +44,7 @@ class MNISTRNNTask(Task):
         return ds_train, ds_val
 
     def get_rdm_stimuli(self, data_dir="data", seed=42):
-        """100 stimuli: 10 exemplars × 10 digits, each as 7-step sequence."""
+        """100 stimuli: 10 exemplars × 10 digits, each as 28-step sequence."""
         _, _, test_x, test_y = _mnist_to_sequences(data_dir)
         rng = np.random.default_rng(seed)
         inputs_list, digit_list = [], []

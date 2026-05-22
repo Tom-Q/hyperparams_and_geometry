@@ -10,7 +10,7 @@ SUPERVISED_CATS = {
 
 RNN_CATS = {
     "batch_size":   [8, 64],
-    "cell_type":    ["rnn", "gru", "lstm"],
+    "cell_type":    ["rnn", "gru"],
     "n_rnn_layers": [1, 2],
     "optimizer":    ["sgd", "adam"],
     "init_scale":   [0.01, 1.0],
