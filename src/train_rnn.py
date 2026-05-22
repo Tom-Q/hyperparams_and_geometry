@@ -2,7 +2,6 @@ import json
 import math
 from pathlib import Path
 
-import numpy as np
 import torch
 
 from .dataset import make_loader
@@ -32,8 +31,8 @@ def _evaluate(model, loader, criterion, device, multiclass=False):
 
 
 def train_network(task, config, run_dir, rdm_inputs, ds_train=None, ds_val=None,
-                  device=None, max_epochs_override=None, verbose=False):
-    """Train one RNN. Returns metric value (float)."""
+                  ds_test=None, device=None, max_epochs_override=None, verbose=False):
+    """Train one RNN. Returns best metric value (float)."""
     run_dir = Path(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -71,13 +70,17 @@ def train_network(task, config, run_dir, rdm_inputs, ds_train=None, ds_val=None,
     total_steps      = max_epochs * steps_per_epoch
     checkpoint_steps = set(log4_checkpoints(total_steps))
 
-    curve_steps, curve_train_loss, curve_val_loss, curve_val_acc = [], [], [], []
+    history = []
 
-    global_step   = 0
-    best_val_loss = float("inf")
-    best_val_acc  = 0.0
-    best_val_mse  = float("inf")
-    no_improve    = 0
+    global_step       = 0
+    best_val_loss     = float("inf")    # for early stopping
+    no_improve        = 0
+    # Best model tracking: val_acc (higher better) or val_mse (lower better)
+    best_model_metric = float("inf") if use_mse else -1.0
+    best_epoch        = 0
+    best_step         = 0
+    final_epoch       = 0
+    final_metric      = 0.0
 
     for epoch in range(max_epochs):
         model.train()
@@ -97,25 +100,36 @@ def train_network(task, config, run_dir, rdm_inputs, ds_train=None, ds_val=None,
             epoch_loss += loss.item() * len(y)
 
             if global_step in checkpoint_steps:
-                save_activations_rnn(model, rdm_tensor, global_step, run_dir,
+                save_activations_rnn(model, rdm_tensor,
+                                     run_dir / f"step_{global_step:07d}",
                                      device, time_indices=time_indices)
 
         epoch_loss /= len(ds_train)
         val_loss, val_acc = _evaluate(model, val_loader, criterion, device, multiclass)
-        # Track best metric seen so far (val_loss for MSE tasks, val_acc otherwise).
-        if use_mse:
-            best_val_mse = min(best_val_mse, val_loss)
-        else:
-            best_val_acc = max(best_val_acc, val_acc)
+
         if verbose:
             metric_str = f"val_mse={val_loss:.4f}" if use_mse else f"val_acc={val_acc:.4f}  val_loss={val_loss:.4f}"
             print(f"  epoch {epoch+1:3d}  {metric_str}", flush=True)
 
-        curve_steps.append(global_step)
-        curve_train_loss.append(epoch_loss)
-        curve_val_loss.append(val_loss)
-        curve_val_acc.append(val_acc)
+        record = {
+            "epoch":      epoch + 1,
+            "step":       global_step,
+            "train_loss": round(float(epoch_loss), 6),
+            "val_loss":   round(float(val_loss),   6),
+        }
+        if not use_mse:
+            record["val_acc"] = round(float(val_acc), 6)
+        history.append(record)
 
+        # Best model tracking
+        improved = (val_loss < best_model_metric) if use_mse else (val_acc > best_model_metric)
+        if improved:
+            best_model_metric = val_loss if use_mse else val_acc
+            best_epoch        = epoch + 1
+            best_step         = global_step
+            torch.save(model.state_dict(), run_dir / "model_best.pt")
+
+        # Early stopping (by val_loss)
         if epoch >= MIN_EPOCHS - 1:
             if val_loss < best_val_loss - 1e-4:
                 best_val_loss = val_loss
@@ -127,15 +141,42 @@ def train_network(task, config, run_dir, rdm_inputs, ds_train=None, ds_val=None,
         elif val_loss < best_val_loss:
             best_val_loss = val_loss
 
-    np.savez(
-        run_dir / "training_curves.npz",
-        steps      = np.array(curve_steps),
-        train_loss = np.array(curve_train_loss),
-        val_loss   = np.array(curve_val_loss),
-        val_acc    = np.array(curve_val_acc),
-    )
+    final_epoch  = epoch + 1
+    final_metric = val_loss if use_mse else val_acc
 
-    with open(run_dir / "config.json", "w") as f:
-        json.dump(dict(config), f, indent=2)
+    # Save final activations from current (end-of-training) weights
+    save_activations_rnn(model, rdm_tensor, run_dir / "final",
+                         device, time_indices=time_indices)
 
-    return float(best_val_mse if use_mse else best_val_acc)
+    # Save best activations by reloading best weights
+    model.load_state_dict(torch.load(run_dir / "model_best.pt", map_location=device))
+    save_activations_rnn(model, rdm_tensor, run_dir / "best",
+                         device, time_indices=time_indices)
+
+    # Test-set evaluation using best weights (optional)
+    test_metric = None
+    if ds_test is not None and not use_mse:
+        test_loader = make_loader(ds_test, batch_size=256, shuffle=False)
+        _, test_acc = _evaluate(model, test_loader, criterion, device, multiclass)
+        test_metric = round(float(test_acc), 6)
+
+    metadata = {
+        "task":         task.name,
+        "paradigm":     task.paradigm,
+        "config":       dict(config),
+        "best_epoch":   best_epoch,
+        "best_step":    best_step,
+        "best_metric":  round(float(best_model_metric), 6),
+        "final_epoch":  final_epoch,
+        "final_step":   global_step,
+        "final_metric": round(float(final_metric), 6),
+    }
+    if test_metric is not None:
+        metadata["test_metric"] = test_metric
+
+    with open(run_dir / "metadata.json", "w") as f:
+        json.dump(metadata, f, indent=2)
+    with open(run_dir / "history.json", "w") as f:
+        json.dump(history, f, indent=2)
+
+    return float(best_model_metric)

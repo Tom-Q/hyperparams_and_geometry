@@ -11,8 +11,8 @@ from .rdm import save_activations_mlp, stimuli_to_tensor
 from .utils import log4_checkpoints, make_optimizer, l1_penalty
 
 EPSILON       = 0.1    # fixed ε for ε-greedy; not a GP variable
-EVAL_INTERVAL = 100    # episodes between mean-return evaluations
-EVAL_EPISODES = 100    # episodes averaged for the success check
+EVAL_INTERVAL = 1000   # environment steps between mean-return evaluations
+N_EVAL_EPISODES = 10   # episodes averaged per evaluation
 
 
 def _eval_mean_return(model, env_factory, n_episodes, device):
@@ -39,7 +39,7 @@ def _eval_mean_return(model, env_factory, n_episodes, device):
 
 def train_network(task, config, run_dir, rdm_inputs, env_factory,
                   device=None, max_steps_override=None, verbose=False):
-    """Online Q-learning. Returns mean_return (float)."""
+    """Online Q-learning. Returns best mean_return (float)."""
     run_dir = Path(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -64,15 +64,15 @@ def train_network(task, config, run_dir, rdm_inputs, env_factory,
     stimuli_t        = stimuli_to_tensor(rdm_inputs)
     checkpoint_steps = set(log4_checkpoints(max_steps))
 
-    env           = env_factory()
-    global_step   = 0
-    episode_count = 0
-    final_return  = 0.0
+    history = []
 
-    curve_steps, curve_returns = [], []
+    env         = env_factory()
+    global_step = 0
+    obs, _      = env.reset()
 
-    obs, _ = env.reset()
-    ep_ret = 0.0
+    best_return  = float("-inf")
+    best_step    = 0
+    final_return = 0.0
 
     while global_step < max_steps:
         global_step += 1
@@ -101,44 +101,58 @@ def train_network(task, config, run_dir, rdm_inputs, env_factory,
         loss.backward()
         optimizer.step()
 
-        ep_ret += reward
-
         if global_step in checkpoint_steps:
-            save_activations_mlp(model, stimuli_t, global_step, run_dir, device)
+            save_activations_mlp(model, stimuli_t,
+                                 run_dir / f"step_{global_step:07d}", device)
 
-        if done:
-            episode_count += 1
-            ep_ret         = 0.0
-            obs, _         = env.reset()
+        if global_step % EVAL_INTERVAL == 0:
+            mean_ret = _eval_mean_return(model, env_factory, N_EVAL_EPISODES, device)
+            history.append({"step": global_step, "mean_return": round(float(mean_ret), 4)})
+            if mean_ret > best_return:
+                best_return = mean_ret
+                best_step   = global_step
+                torch.save(model.state_dict(), run_dir / "model_best.pt")
+            if verbose:
+                tag = "  *** SOLVED ***" if mean_ret >= task.success_threshold else ""
+                print(f"  step {global_step:8,}  mean_return={mean_ret:7.2f}{tag}", flush=True)
+            if mean_ret >= task.success_threshold:
+                break
 
-            if episode_count % EVAL_INTERVAL == 0:
-                mean_ret = _eval_mean_return(model, env_factory, EVAL_EPISODES, device)
-                final_return = mean_ret
-                curve_steps.append(global_step)
-                curve_returns.append(mean_ret)
-                if verbose:
-                    tag = "  *** SOLVED ***" if mean_ret >= task.success_threshold else ""
-                    print(f"  ep {episode_count:6d}  step {global_step:8,}  "
-                          f"mean_return={mean_ret:7.2f}{tag}", flush=True)
-                if mean_ret >= task.success_threshold:
-                    break
-        else:
-            obs = next_obs
+        obs = next_obs if not done else env.reset()[0]
 
     env.close()
 
-    # Final evaluation if training ended without a recent EVAL_INTERVAL check
-    if not curve_returns or curve_returns[-1] != final_return:
-        final_return = _eval_mean_return(model, env_factory, EVAL_EPISODES, device)
-        curve_steps.append(global_step)
-        curve_returns.append(final_return)
+    # Final eval if last eval wasn't at global_step
+    if not history or history[-1]["step"] != global_step:
+        mean_ret = _eval_mean_return(model, env_factory, N_EVAL_EPISODES, device)
+        history.append({"step": global_step, "mean_return": round(float(mean_ret), 4)})
+        if mean_ret > best_return:
+            best_return = mean_ret
+            best_step   = global_step
+            torch.save(model.state_dict(), run_dir / "model_best.pt")
 
-    np.savez(
-        run_dir / "training_curves.npz",
-        steps   = np.array(curve_steps),
-        returns = np.array(curve_returns),
-    )
-    with open(run_dir / "config.json", "w") as f:
-        json.dump(dict(config), f, indent=2)
+    final_return = history[-1]["mean_return"]
 
-    return float(final_return)
+    # Save final activations from current (end-of-training) weights
+    save_activations_mlp(model, stimuli_t, run_dir / "final", device)
+
+    # Save best activations by reloading best weights
+    model.load_state_dict(torch.load(run_dir / "model_best.pt", map_location=device))
+    save_activations_mlp(model, stimuli_t, run_dir / "best", device)
+
+    metadata = {
+        "task":         task.name,
+        "paradigm":     task.paradigm,
+        "config":       dict(config),
+        "best_step":    best_step,
+        "best_metric":  round(float(best_return), 4),
+        "final_step":   global_step,
+        "final_metric": round(float(final_return), 4),
+    }
+
+    with open(run_dir / "metadata.json", "w") as f:
+        json.dump(metadata, f, indent=2)
+    with open(run_dir / "history.json", "w") as f:
+        json.dump(history, f, indent=2)
+
+    return float(best_return)
