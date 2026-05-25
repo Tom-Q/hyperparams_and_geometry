@@ -7,8 +7,8 @@ from torch.utils.data import TensorDataset
 from .base import Task
 from ._shared import SUPERVISED_CATS
 
-N_BITS     = 12
-PER_LEVEL  = 20   # levels 0,12 → 1; levels 1,11 → 12; levels 2-10 → 20; total = 206
+N_BITS     = 8
+PER_LEVEL  = 20   # levels 0,8 → 1; levels 1,7 → 8; levels 2-6 → 20; total = 138
 
 
 def _all_parity_patterns():
@@ -44,7 +44,10 @@ class ParityTask(Task):
     input_size        = N_BITS
     output_size       = 1
     n_steps           = None
-    hidden_size_range = (4, 256)
+    hidden_size_range = (16, 256)
+    l1_range_hi       = 1e-2
+    l2_range_hi       = 1e-2
+    max_epochs        = 100
     success_threshold = 0.95
     metric_name       = "val_acc"
 

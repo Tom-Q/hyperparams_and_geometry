@@ -31,7 +31,7 @@ from botorch.optim import optimize_acqf_mixed
 from gpytorch.mlls import ExactMarginalLogLikelihood
 from torch.quasirandom import SobolEngine
 
-N_SOBOL = 20
+N_SOBOL = 100
 
 
 # ---------------------------------------------------------------------------
@@ -41,11 +41,13 @@ N_SOBOL = 20
 def _cont_params_for_task(task):
     """Return list of (name, raw_lo, raw_hi) for continuous dims."""
     lo, hi = task.hidden_size_range
+    l1_hi = getattr(task, "l1_range_hi", 1e-2)
+    l2_hi = getattr(task, "l2_range_hi", 1e-2)
     return [
         ("hidden_size",   lo,   hi),
         ("learning_rate", 1e-5, 1e-1),
-        ("l1_reg",        1e-6, 1e-1),
-        ("l2_reg",        1e-6, 1e-1),
+        ("l1_reg",        1e-6, l1_hi),
+        ("l2_reg",        1e-6, l2_hi),
     ]
 
 
@@ -181,8 +183,12 @@ def build_run_counts(observations, all_combos, cat_params):
     return counts
 
 
-def next_combo(run_counts, all_combos):
-    idx = min(range(len(all_combos)), key=lambda i: run_counts[i])
+def next_combo(run_counts, all_combos, rng=None):
+    min_count = min(run_counts)
+    tied = [i for i, c in enumerate(run_counts) if c == min_count]
+    if rng is None:
+        rng = np.random.default_rng()
+    idx = int(rng.choice(tied))
     return all_combos[idx], idx
 
 
@@ -204,7 +210,8 @@ def suggest_next(observations, task, beta=8.0):
     bounds      = _make_bounds(cont_params, cat_params)
 
     run_counts          = build_run_counts(observations, all_combos, cat_params)
-    combo, combo_idx    = next_combo(run_counts, all_combos)
+    rng                 = np.random.default_rng(len(observations))
+    combo, combo_idx    = next_combo(run_counts, all_combos, rng)
 
     if len(observations) < N_SOBOL:
         u    = sobol_continuous(seed=len(observations), n_cont=n_cont)

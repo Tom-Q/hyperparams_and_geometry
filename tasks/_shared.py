@@ -1,11 +1,11 @@
 """Shared hyperparameter space definitions for all task paradigms."""
 
 SUPERVISED_CATS = {
-    "batch_size": [1, 8, 512],
-    "depth":      [1, 2, 3],
+    "batch_size": [1, 8, 64],
+    "depth":      [1, 2],
     "activation": ["sigmoid", "tanh", "relu"],
     "optimizer":  ["sgd", "adam"],
-    "init_scale": [0.01, 1.0],
+    "init_scale": [0.1, 1.0],
 }
 
 RNN_CATS = {
