@@ -29,9 +29,14 @@ import numpy as np
 from sklearn.ensemble import RandomForestRegressor
 from torch.quasirandom import SobolEngine
 
-N_SOBOL         = 100     # primary observations before switching to RF
-N_RF_CANDIDATES = 10_000  # acquisition grid size
+N_SOBOL         = 100     # total observations (primary + repeats) before switching to RF
+N_RF_CANDIDATES = 50_000  # acquisition grid size
 MIN_NOISE_PAIRS = 5       # repeat pairs needed before fitting noise model
+
+# Continuous and categorical dimensions used as noise model features.
+# Update here if parameters are added or renamed.
+NOISE_CONT_FEATURES = ["learning_rate", "hidden_size"]
+NOISE_CAT_FEATURES  = ["batch_size"]
 
 
 # ---------------------------------------------------------------------------
@@ -130,7 +135,7 @@ def get_repeat_pairs(observations):
 def fit_rf(X, Y, n_estimators=100):
     rf = RandomForestRegressor(
         n_estimators=n_estimators,
-        min_samples_leaf=2,
+        min_samples_leaf=2,  # prevents zero-variance single-sample leaves
         random_state=0,
     )
     rf.fit(X, Y.ravel())
@@ -147,33 +152,27 @@ def get_tree_predictions(rf, X_query):
 # ---------------------------------------------------------------------------
 
 def _noise_features_single(config, cont_params, cat_params):
-    """[1, u_lr, u_hidden, u_batch?] for one config."""
-    u_lr = u_hidden = None
-    for name, raw_lo, raw_hi in cont_params:
-        v = (math.log(config[name]) - math.log(raw_lo)) / (math.log(raw_hi) - math.log(raw_lo))
-        if name == "learning_rate":
-            u_lr = v
-        elif name == "hidden_size":
-            u_hidden = v
-    feats = [1.0, u_lr, u_hidden]
+    """[1, <cont noise features>, <cat noise features>?] for one config."""
+    unit_vals  = _cont_to_unit(config, cont_params)
+    cont_names = [name for name, _, _ in cont_params]
+    feats = [1.0] + [unit_vals[cont_names.index(n)] for n in NOISE_CONT_FEATURES]
     for name, choices in cat_params:
-        if name == "batch_size":
-            feats.append(choices.index(config[name]) / max(1, len(choices) - 1))
-            break
+        if name in NOISE_CAT_FEATURES:
+            lo, hi = math.log(min(choices)), math.log(max(choices))
+            feats.append((math.log(config[name]) - lo) / (hi - lo) if hi > lo else 0.0)
     return np.array(feats, dtype=float)
 
 
 def _noise_features_batch(unit_cont, combo, cont_params, cat_params):
     """Shape (n_cand, n_feats) for vectorised noise prediction."""
-    n = len(unit_cont)
-    idx_lr = next(i for i, (nm, _, _) in enumerate(cont_params) if nm == "learning_rate")
-    idx_hs = next(i for i, (nm, _, _) in enumerate(cont_params) if nm == "hidden_size")
-    cols = [np.ones(n), unit_cont[:, idx_lr], unit_cont[:, idx_hs]]
+    n          = len(unit_cont)
+    cont_names = [name for name, _, _ in cont_params]
+    cols = [np.ones(n)] + [unit_cont[:, cont_names.index(n)] for n in NOISE_CONT_FEATURES]
     for name, choices in cat_params:
-        if name == "batch_size":
-            u_batch = choices.index(combo[name]) / max(1, len(choices) - 1)
+        if name in NOISE_CAT_FEATURES:
+            lo, hi = math.log(min(choices)), math.log(max(choices))
+            u_batch = (math.log(combo[name]) - lo) / (hi - lo) if hi > lo else 0.0
             cols.append(np.full(n, u_batch))
-            break
     return np.column_stack(cols)
 
 
@@ -198,18 +197,20 @@ def fit_noise_model(repeat_pairs, cont_params, cat_params):
 # ---------------------------------------------------------------------------
 
 def suggest_continuous_for_combo_rf(rf, noise_coeffs, combo, cont_params,
-                                    cat_params, beta, n_candidates=N_RF_CANDIDATES):
+                                    cat_params, beta, n_candidates=N_RF_CANDIDATES, seed=0):
     n_cont = len(cont_params)
 
-    engine = SobolEngine(dimension=n_cont, scramble=True, seed=0)
+    engine = SobolEngine(dimension=n_cont, scramble=True, seed=seed)
     unit_cont = engine.draw(n_candidates).numpy()  # (n_cand, n_cont)
 
     cat_indices = np.array([float(choices.index(combo[name])) for name, choices in cat_params])
-    X_cand = np.column_stack([unit_cont, np.tile(cat_indices, (n_candidates, 1))])
+    cat_part = np.empty((n_candidates, len(cat_indices)))
+    cat_part[:] = cat_indices  # broadcast single row to all candidates
+    X_cand = np.hstack([unit_cont, cat_part])
 
     tree_preds = get_tree_predictions(rf, X_cand)  # (n_trees, n_cand)
     mean      = tree_preds.mean(axis=0)
-    var_total = tree_preds.var(axis=0)
+    var_total = tree_preds.var(axis=0, ddof=1)
 
     if noise_coeffs is not None:
         noise_feats  = _noise_features_batch(unit_cont, combo, cont_params, cat_params)
@@ -267,7 +268,7 @@ def next_combo(run_counts, all_combos, rng=None):
 def suggest_next(observations, task, beta=8.0):
     """
     Select least-visited categorical combo (by primary observations), then:
-      - Sobol sample for continuous dims if primary obs < N_SOBOL
+      - Sobol sample for continuous dims if total obs < N_SOBOL
       - Otherwise: RF surrogate with epistemic UCB acquisition
     Returns (config dict, combo_idx, mode_str).
     """
@@ -282,7 +283,7 @@ def suggest_next(observations, task, beta=8.0):
     rng              = np.random.default_rng(n_primary)
     combo, combo_idx = next_combo(run_counts, all_combos, rng)
 
-    if n_primary < N_SOBOL:
+    if len(observations) < N_SOBOL:
         u    = sobol_continuous(seed=n_primary, n_cont=len(cont_params))
         cont = _unit_to_cont(u, cont_params)
         mode = "sobol"
@@ -294,7 +295,8 @@ def suggest_next(observations, task, beta=8.0):
         rf   = fit_rf(X, Y)
 
         cont = suggest_continuous_for_combo_rf(
-            rf, noise_coeffs, combo, cont_params, cat_params, beta
+            rf, noise_coeffs, combo, cont_params, cat_params, beta,
+            seed=len(observations),
         )
         mode = "rf"
 

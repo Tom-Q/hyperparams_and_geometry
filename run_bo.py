@@ -34,7 +34,6 @@ def parse_args():
     p.add_argument("--task",            type=str,   required=True,
                    choices=list(TASKS.keys()))
     p.add_argument("--n-iter",          type=int,   default=300)
-    p.add_argument("--runs-per-config", type=int,   default=1)
     p.add_argument("--output-dir",      type=str,   default="experiments")
     p.add_argument("--data-dir",        type=str,   default="data")
     p.add_argument("--beta",            type=float, default=8.0)
@@ -44,40 +43,45 @@ def parse_args():
 
 
 def run_config(task, config, run_id_base, output_dir, rdm_inputs,
-               ds_train, ds_val, runs_per_config, max_epochs_override):
-    val_accs = []
-    for r in range(runs_per_config):
-        run_dir = Path(output_dir) / f"{run_id_base}_r{r}"
-        print(f"    run {r+1}/{runs_per_config}  ->  {run_dir.name}")
+               ds_train, ds_val, max_epochs_override):
+    run_dir = Path(output_dir) / f"{run_id_base}_r0"
+    print(f"    ->  {run_dir.name}")
 
-        val_acc = train_network(
-            task                = task,
-            config              = config,
-            run_dir             = run_dir,
-            rdm_inputs          = rdm_inputs,
-            ds_train            = ds_train,
-            ds_val              = ds_val,
-            max_epochs_override = max_epochs_override,
-            verbose             = True,
-        )
+    val_acc = train_network(
+        task                = task,
+        config              = config,
+        run_dir             = run_dir,
+        rdm_inputs          = rdm_inputs,
+        ds_train            = ds_train,
+        ds_val              = ds_val,
+        max_epochs_override = max_epochs_override,
+        verbose             = True,
+    )
 
-        flag = "OK" if val_acc >= task.success_threshold else "FAILED"
-        print(f"        val_acc={val_acc:.4f}  [{flag}]")
-        val_accs.append(val_acc)
-
-    return val_accs
+    flag = "OK" if val_acc >= task.success_threshold else "FAILED"
+    print(f"        val_acc={val_acc:.4f}  [{flag}]")
+    return [val_acc]
 
 
 def _pending_repeat(observations):
-    """Return (config, primary_idx) if the last primary obs has no repeat yet, else (None, None)."""
-    if not observations:
+    """Return (config, primary_idx) if the most recent even-numbered primary needs a repeat.
+
+    Repeats every other primary: P, P, R, P, P, R, ...
+    A repeat is triggered after the 2nd, 4th, 6th, ... primary (i.e. when n_primary is even).
+    """
+    primary_obs = get_primary_observations(observations)
+    n_primary = len(primary_obs)
+
+    if n_primary == 0 or n_primary % 2 != 0:
         return None, None
+
+    # Find the last primary's index in the observations list
+    last_primary_idx = None
     for i in range(len(observations) - 1, -1, -1):
         if not observations[i].get("is_repeat", False):
             last_primary_idx = i
             break
-    else:
-        return None, None
+
     has_repeat = any(
         o.get("is_repeat") and o.get("repeat_of") == last_primary_idx
         for o in observations
@@ -150,7 +154,6 @@ def main():
             rdm_inputs          = rdm_inputs,
             ds_train            = ds_train,
             ds_val              = ds_val,
-            runs_per_config     = args.runs_per_config,
             max_epochs_override = args.max_epochs,
         )
 
@@ -158,12 +161,12 @@ def main():
         print(f"  mean_metric = {mean_acc:.4f}")
 
         observations.append({
-            "iteration":  iteration,
-            "config":     config,
-            "val_accs":   val_accs,
+            "iteration":   iteration,
+            "config":      config,
+            "val_accs":    val_accs,
             "mean_metric": mean_acc,
-            "is_repeat":  is_repeat,
-            "repeat_of":  repeat_of_idx,
+            "is_repeat":   is_repeat,
+            "repeat_of":   repeat_of_idx,  # index into observations list (== iteration number)
         })
         save_state(state_path, observations)
 
