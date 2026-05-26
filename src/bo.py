@@ -1,20 +1,23 @@
 """
-Stratified round-robin Bayesian optimisation with MixedSingleTaskGP.
+Stratified round-robin Bayesian optimisation with Random Forest surrogate.
 
 Design
 ------
-The GP sees ALL observations with both continuous AND categorical dims encoded.
 Round-robin over the task's categorical combos guarantees balanced coverage.
+The RF sees ALL observations (primary + repeats); only primary observations
+count toward round-robin and the Sobol threshold.
 
-For each iteration:
-  1. Pick the least-visited categorical combo (round-robin).
-  2. If total observations < N_SOBOL: draw a Sobol point for the continuous dims.
-  3. Otherwise: fit MixedSingleTaskGP on all data, fix the selected combo's
-     categorical dims, optimise the acquisition over continuous dims only.
+Every other iteration (in run_bo.py) repeats the most recent primary config
+to give a direct local noise estimate: (y1-y2)^2/2 ~ sigma^2_aleatoric.
+A log-linear OLS model generalises these estimates to any config.
 
-Input tensor layout (N × (N_CONT + N_CAT)):
-  dims 0 .. N_CONT-1 : continuous, normalised to [0,1] via log-transform
-  dims N_CONT ..      : categorical indices (float, treated as categorical by the GP)
+Epistemic uncertainty = max(0, between-tree variance - aleatoric estimate).
+Acquisition: UCB = mean + beta * sqrt(sigma^2_epistemic), maximised by
+evaluating ~10,000 Sobol candidates per combo and returning the argmax.
+
+Input encoding (same for Sobol and RF):
+  dims 0..N_CONT-1 : continuous, log-transformed and normalised to [0,1]
+  dims N_CONT..    : categorical indices (float)
 """
 
 import json
@@ -23,15 +26,12 @@ from itertools import product as iproduct
 from pathlib import Path
 
 import numpy as np
-import torch
-from botorch.acquisition import qUpperConfidenceBound
-from botorch.fit import fit_gpytorch_mll
-from botorch.models.gp_regression_mixed import MixedSingleTaskGP
-from botorch.optim import optimize_acqf_mixed
-from gpytorch.mlls import ExactMarginalLogLikelihood
+from sklearn.ensemble import RandomForestRegressor
 from torch.quasirandom import SobolEngine
 
-N_SOBOL = 100
+N_SOBOL         = 100     # primary observations before switching to RF
+N_RF_CANDIDATES = 10_000  # acquisition grid size
+MIN_NOISE_PAIRS = 5       # repeat pairs needed before fitting noise model
 
 
 # ---------------------------------------------------------------------------
@@ -65,17 +65,6 @@ def _all_combos_for_task(task):
     ]
 
 
-def _make_bounds(cont_params, cat_params):
-    lo, hi = [], []
-    for _ in cont_params:
-        lo.append(0.0)
-        hi.append(1.0)
-    for _, choices in cat_params:
-        lo.append(0.0)
-        hi.append(float(len(choices) - 1))
-    return torch.tensor([lo, hi], dtype=torch.double)
-
-
 # ---------------------------------------------------------------------------
 # Encoding helpers
 # ---------------------------------------------------------------------------
@@ -105,53 +94,133 @@ def _cat_to_indices(config, cat_params):
     return [float(choices.index(config[name])) for name, choices in cat_params]
 
 
-def encode_config(config, cont_params, cat_params):
-    row = _cont_to_unit(config, cont_params) + _cat_to_indices(config, cat_params)
-    return torch.tensor(row, dtype=torch.double)
-
-
-def build_XY(observations, cont_params, cat_params):
-    X = torch.stack([encode_config(o["config"], cont_params, cat_params)
-                     for o in observations])
-    Y = torch.tensor([[o["mean_metric"]] for o in observations], dtype=torch.double)
-    return X, Y
+def build_XY_rf(observations, cont_params, cat_params):
+    rows, ys = [], []
+    for o in observations:
+        row = _cont_to_unit(o["config"], cont_params) + _cat_to_indices(o["config"], cat_params)
+        rows.append(row)
+        ys.append(o["mean_metric"])
+    return np.array(rows, dtype=float), np.array(ys, dtype=float)
 
 
 # ---------------------------------------------------------------------------
-# GP fitting
+# Observation splitting
 # ---------------------------------------------------------------------------
 
-def fit_gp(X, Y, n_cont):
-    cat_dims = list(range(n_cont, X.shape[1]))
-    model = MixedSingleTaskGP(X, Y, cat_dims=cat_dims)
-    mll   = ExactMarginalLogLikelihood(model.likelihood, model)
-    fit_gpytorch_mll(mll)
-    return model
+def get_primary_observations(observations):
+    return [o for o in observations if not o.get("is_repeat", False)]
+
+
+def get_repeat_pairs(observations):
+    """Return list of (config, y_primary, y_repeat) for completed pairs."""
+    pairs = []
+    for obs in observations:
+        if obs.get("is_repeat", False):
+            ref_idx = obs.get("repeat_of")
+            if ref_idx is not None and ref_idx < len(observations):
+                primary = observations[ref_idx]
+                pairs.append((primary["config"], primary["mean_metric"], obs["mean_metric"]))
+    return pairs
 
 
 # ---------------------------------------------------------------------------
-# Acquisition optimisation
+# RF fitting
 # ---------------------------------------------------------------------------
 
-def _fixed_features_for_combo(combo, cat_params, n_cont):
-    return {
-        n_cont + j: float(choices.index(combo[name]))
-        for j, (name, choices) in enumerate(cat_params)
-    }
-
-
-def suggest_continuous_for_combo(gp, combo, bounds, cat_params, n_cont, beta=8.0):
-    acqf = qUpperConfidenceBound(model=gp, beta=beta)
-    candidate, _ = optimize_acqf_mixed(
-        acq_function        = acqf,
-        bounds              = bounds,
-        fixed_features_list = [_fixed_features_for_combo(combo, cat_params, n_cont)],
-        q                   = 1,
-        num_restarts        = 10,
-        raw_samples         = 128,
+def fit_rf(X, Y, n_estimators=100):
+    rf = RandomForestRegressor(
+        n_estimators=n_estimators,
+        min_samples_leaf=2,
+        random_state=0,
     )
-    unit_cont = candidate.squeeze(0)[:n_cont]
-    return unit_cont
+    rf.fit(X, Y.ravel())
+    return rf
+
+
+def get_tree_predictions(rf, X_query):
+    """Returns shape (n_trees, n_query)."""
+    return np.array([t.predict(X_query) for t in rf.estimators_])
+
+
+# ---------------------------------------------------------------------------
+# Noise model
+# ---------------------------------------------------------------------------
+
+def _noise_features_single(config, cont_params, cat_params):
+    """[1, u_lr, u_hidden, u_batch?] for one config."""
+    u_lr = u_hidden = None
+    for name, raw_lo, raw_hi in cont_params:
+        v = (math.log(config[name]) - math.log(raw_lo)) / (math.log(raw_hi) - math.log(raw_lo))
+        if name == "learning_rate":
+            u_lr = v
+        elif name == "hidden_size":
+            u_hidden = v
+    feats = [1.0, u_lr, u_hidden]
+    for name, choices in cat_params:
+        if name == "batch_size":
+            feats.append(choices.index(config[name]) / max(1, len(choices) - 1))
+            break
+    return np.array(feats, dtype=float)
+
+
+def _noise_features_batch(unit_cont, combo, cont_params, cat_params):
+    """Shape (n_cand, n_feats) for vectorised noise prediction."""
+    n = len(unit_cont)
+    idx_lr = next(i for i, (nm, _, _) in enumerate(cont_params) if nm == "learning_rate")
+    idx_hs = next(i for i, (nm, _, _) in enumerate(cont_params) if nm == "hidden_size")
+    cols = [np.ones(n), unit_cont[:, idx_lr], unit_cont[:, idx_hs]]
+    for name, choices in cat_params:
+        if name == "batch_size":
+            u_batch = choices.index(combo[name]) / max(1, len(choices) - 1)
+            cols.append(np.full(n, u_batch))
+            break
+    return np.column_stack(cols)
+
+
+def fit_noise_model(repeat_pairs, cont_params, cat_params):
+    """OLS log-linear noise model on repeat pairs.
+
+    Returns coefficient array or None if fewer than MIN_NOISE_PAIRS pairs.
+    """
+    if len(repeat_pairs) < MIN_NOISE_PAIRS:
+        return None
+    A, b = [], []
+    for config, y1, y2 in repeat_pairs:
+        noise = max(1e-10, (y1 - y2) ** 2 / 2)
+        A.append(_noise_features_single(config, cont_params, cat_params))
+        b.append(math.log(noise))
+    coeffs, _, _, _ = np.linalg.lstsq(np.array(A), np.array(b), rcond=None)
+    return coeffs
+
+
+# ---------------------------------------------------------------------------
+# Acquisition
+# ---------------------------------------------------------------------------
+
+def suggest_continuous_for_combo_rf(rf, noise_coeffs, combo, cont_params,
+                                    cat_params, beta, n_candidates=N_RF_CANDIDATES):
+    n_cont = len(cont_params)
+
+    engine = SobolEngine(dimension=n_cont, scramble=True, seed=0)
+    unit_cont = engine.draw(n_candidates).numpy()  # (n_cand, n_cont)
+
+    cat_indices = np.array([float(choices.index(combo[name])) for name, choices in cat_params])
+    X_cand = np.column_stack([unit_cont, np.tile(cat_indices, (n_candidates, 1))])
+
+    tree_preds = get_tree_predictions(rf, X_cand)  # (n_trees, n_cand)
+    mean      = tree_preds.mean(axis=0)
+    var_total = tree_preds.var(axis=0)
+
+    if noise_coeffs is not None:
+        noise_feats  = _noise_features_batch(unit_cont, combo, cont_params, cat_params)
+        var_aleatoric = np.exp(noise_feats @ noise_coeffs)
+        var_epistemic = np.maximum(0.0, var_total - var_aleatoric)
+    else:
+        var_epistemic = var_total
+
+    ucb      = mean + beta * np.sqrt(var_epistemic)
+    best_idx = int(np.argmax(ucb))
+    return _unit_to_cont(unit_cont[best_idx], cont_params)
 
 
 # ---------------------------------------------------------------------------
@@ -160,8 +229,7 @@ def suggest_continuous_for_combo(gp, combo, bounds, cat_params, n_cont, beta=8.0
 
 def sobol_continuous(seed, n_cont):
     engine = SobolEngine(dimension=n_cont, scramble=True, seed=seed)
-    u = engine.draw(1).double().squeeze(0)
-    return u
+    return engine.draw(1).double().squeeze(0)
 
 
 # ---------------------------------------------------------------------------
@@ -198,39 +266,42 @@ def next_combo(run_counts, all_combos, rng=None):
 
 def suggest_next(observations, task, beta=8.0):
     """
-    Select least-visited categorical combo, then:
-      - Sobol sample for continuous dims if total obs < N_SOBOL
-      - Otherwise: MixedSingleTaskGP suggestion with that combo fixed
+    Select least-visited categorical combo (by primary observations), then:
+      - Sobol sample for continuous dims if primary obs < N_SOBOL
+      - Otherwise: RF surrogate with epistemic UCB acquisition
     Returns (config dict, combo_idx, mode_str).
     """
-    cont_params = _cont_params_for_task(task)
-    cat_params  = cat_params_for_task(task)
-    all_combos  = _all_combos_for_task(task)
-    n_cont      = len(cont_params)
-    bounds      = _make_bounds(cont_params, cat_params)
+    cont_params  = _cont_params_for_task(task)
+    cat_params   = cat_params_for_task(task)
+    all_combos   = _all_combos_for_task(task)
 
-    run_counts          = build_run_counts(observations, all_combos, cat_params)
-    rng                 = np.random.default_rng(len(observations))
-    combo, combo_idx    = next_combo(run_counts, all_combos, rng)
+    primary_obs = get_primary_observations(observations)
+    n_primary   = len(primary_obs)
 
-    if len(observations) < N_SOBOL:
-        u    = sobol_continuous(seed=len(observations), n_cont=n_cont)
+    run_counts       = build_run_counts(primary_obs, all_combos, cat_params)
+    rng              = np.random.default_rng(n_primary)
+    combo, combo_idx = next_combo(run_counts, all_combos, rng)
+
+    if n_primary < N_SOBOL:
+        u    = sobol_continuous(seed=n_primary, n_cont=len(cont_params))
         cont = _unit_to_cont(u, cont_params)
         mode = "sobol"
     else:
-        X, Y = build_XY(observations, cont_params, cat_params)
-        gp   = fit_gp(X, Y, n_cont)
-        u    = suggest_continuous_for_combo(gp, combo, bounds, cat_params, n_cont, beta)
-        cont = _unit_to_cont(u, cont_params)
-        mode = "gp"
+        repeat_pairs  = get_repeat_pairs(observations)
+        noise_coeffs  = fit_noise_model(repeat_pairs, cont_params, cat_params)
+
+        X, Y = build_XY_rf(observations, cont_params, cat_params)
+        rf   = fit_rf(X, Y)
+
+        cont = suggest_continuous_for_combo_rf(
+            rf, noise_coeffs, combo, cont_params, cat_params, beta
+        )
+        mode = "rf"
 
     config = {**combo, **cont}
-    if "depth" in config:
-        config["depth"] = int(config["depth"])
-    if "batch_size" in config:
-        config["batch_size"] = int(config["batch_size"])
-    if "n_rnn_layers" in config:
-        config["n_rnn_layers"] = int(config["n_rnn_layers"])
+    if "depth"        in config: config["depth"]        = int(config["depth"])
+    if "batch_size"   in config: config["batch_size"]   = int(config["batch_size"])
+    if "n_rnn_layers" in config: config["n_rnn_layers"] = int(config["n_rnn_layers"])
     return config, combo_idx, mode
 
 
