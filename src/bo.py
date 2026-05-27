@@ -96,6 +96,9 @@ def _unit_to_cont(unit_row, cont_params):
 
 
 def _cat_to_indices(config, cat_params):
+    # BUG: integer encoding treats all categoricals as ordered. This is wrong for
+    # unordered categoricals (e.g. activation function). Should use one-hot encoding
+    # for unordered dims. If this branch is ever revived, fix encoding before use.
     return [float(choices.index(config[name])) for name, choices in cat_params]
 
 
@@ -203,6 +206,7 @@ def suggest_continuous_for_combo_rf(rf, noise_coeffs, combo, cont_params,
     engine = SobolEngine(dimension=n_cont, scramble=True, seed=seed)
     unit_cont = engine.draw(n_candidates).numpy()  # (n_cand, n_cont)
 
+    # BUG: same integer encoding issue as _cat_to_indices — wrong for unordered categoricals.
     cat_indices = np.array([float(choices.index(combo[name])) for name, choices in cat_params])
     cat_part = np.empty((n_candidates, len(cat_indices)))
     cat_part[:] = cat_indices  # broadcast single row to all candidates
