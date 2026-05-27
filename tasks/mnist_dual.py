@@ -12,7 +12,6 @@ class MNISTDualTask(Task):
     input_size        = 785   # 784 pixels + 1 task bit
     output_size       = 1
     n_steps           = None
-    hidden_size_range = (4, 1024)
     success_threshold = 0.90
     metric_name       = "val_acc"
 

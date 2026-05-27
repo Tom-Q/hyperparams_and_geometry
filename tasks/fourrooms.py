@@ -83,7 +83,6 @@ class FourRoomsTask(Task):
     input_size        = N_RBF
     output_size       = N_ACTIONS
     n_steps           = None
-    hidden_size_range = (8, 512)
     success_threshold = 0.8    # set empirically after pre-testing
     metric_name       = "mean_return"
     max_steps         = 2_000_000

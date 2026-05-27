@@ -25,7 +25,6 @@ class MNIST10WayTask(Task):
     input_size        = 784
     output_size       = 10
     n_steps           = None
-    hidden_size_range = (4, 1024)
     success_threshold = 0.90
     metric_name       = "val_acc"
 

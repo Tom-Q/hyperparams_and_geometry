@@ -8,7 +8,6 @@ class Task(ABC):
     input_size: int             # flat dim for MLP/RL; per-step dim for RNN
     output_size: int
     n_steps: int | None         # RNN sequence length; None for MLP/RL
-    hidden_size_range: tuple[int, int]
     success_threshold: float
     metric_name: str            # "val_acc" | "mean_return" | "val_mse"
     rdm_time_indices: list | None = None   # time steps to save for RNN tasks

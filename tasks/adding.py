@@ -39,7 +39,6 @@ class AddingTask(Task):
     input_size        = 2
     output_size       = 1
     n_steps           = T
-    hidden_size_range = (16, 512)
     success_threshold = 0.02   # MSE < 0.02 counts as a successful network
     metric_name       = "val_mse"
     rdm_time_indices  = RDM_TIME_INDICES

@@ -30,7 +30,6 @@ class CartPoleTask(Task):
     input_size        = 4   # [cart_pos, cart_vel, pole_angle, pole_ang_vel]
     output_size       = 2   # Q-values for left/right
     n_steps           = None
-    hidden_size_range = (4, 256)
     success_threshold = 195.0   # CartPole-v1 standard: avg return ≥ 195 over 100 eps
     metric_name       = "mean_return"
     max_steps         = 500_000

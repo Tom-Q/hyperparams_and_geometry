@@ -40,11 +40,9 @@ N_SOBOL = 100
 
 def _cont_params_for_task(task):
     """Return list of (name, raw_lo, raw_hi) for continuous dims."""
-    lo, hi = task.hidden_size_range
     l1_hi = getattr(task, "l1_range_hi", 1e-2)
     l2_hi = getattr(task, "l2_range_hi", 1e-2)
     return [
-        ("hidden_size",   lo,   hi),
         ("learning_rate", 1e-5, 1e-1),
         ("l1_reg",        1e-6, l1_hi),
         ("l2_reg",        1e-6, l2_hi),
@@ -97,7 +95,6 @@ def _unit_to_cont(unit_row, cont_params):
         u = float(np.clip(u, 0.0, 1.0))
         log_val = u * (math.log(raw_hi) - math.log(raw_lo)) + math.log(raw_lo)
         result[name] = math.exp(log_val)
-    result["hidden_size"] = max(1, int(round(result["hidden_size"])))
     return result
 
 
@@ -231,12 +228,10 @@ def suggest_next(observations, task, beta=8.0):
         mode = "gp"
 
     config = {**combo, **cont}
-    if "depth" in config:
-        config["depth"] = int(config["depth"])
-    if "batch_size" in config:
-        config["batch_size"] = int(config["batch_size"])
-    if "n_rnn_layers" in config:
-        config["n_rnn_layers"] = int(config["n_rnn_layers"])
+    if "hidden_size"  in config: config["hidden_size"]  = int(config["hidden_size"])
+    if "depth"        in config: config["depth"]        = int(config["depth"])
+    if "batch_size"   in config: config["batch_size"]   = int(config["batch_size"])
+    if "n_rnn_layers" in config: config["n_rnn_layers"] = int(config["n_rnn_layers"])
     return config, combo_idx, mode
 
 

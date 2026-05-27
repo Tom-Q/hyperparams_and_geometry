@@ -50,7 +50,6 @@ class SpiralsTask(Task):
     input_size        = 2
     output_size       = 3
     n_steps           = None
-    hidden_size_range = (16, 256)
     success_threshold = 0.85
     metric_name       = "val_acc"
     max_epochs        = 300

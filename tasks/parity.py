@@ -44,7 +44,6 @@ class ParityTask(Task):
     input_size        = N_BITS
     output_size       = 1
     n_steps           = None
-    hidden_size_range = (16, 256)
     l1_range_hi       = 1e-2
     l2_range_hi       = 1e-2
     max_epochs        = 100

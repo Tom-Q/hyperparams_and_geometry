@@ -28,7 +28,6 @@ class MNISTRNNTask(Task):
     input_size        = INPUT_SIZE
     output_size       = 10
     n_steps           = N_STEPS
-    hidden_size_range = (16, 512)
     success_threshold = 0.90
     metric_name       = "val_acc"
     rdm_time_indices  = [0, 5, 11, 17, 22, 27]   # 6 evenly spaced rows out of 28
