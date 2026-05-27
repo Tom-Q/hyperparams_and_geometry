@@ -110,6 +110,10 @@ def encode_config(config, cont_params, cat_params):
     return torch.tensor(row, dtype=torch.double)
 
 
+def get_primary_observations(observations):
+    return [o for o in observations if not o.get("is_repeat", False)]
+
+
 def build_XY(observations, cont_params, cat_params):
     X = torch.stack([encode_config(o["config"], cont_params, cat_params)
                      for o in observations])
@@ -209,12 +213,14 @@ def suggest_next(observations, task, beta=8.0):
     n_cont      = len(cont_params)
     bounds      = _make_bounds(cont_params, cat_params)
 
-    run_counts          = build_run_counts(observations, all_combos, cat_params)
-    rng                 = np.random.default_rng(len(observations))
+    primary_obs         = get_primary_observations(observations)
+    run_counts          = build_run_counts(primary_obs, all_combos, cat_params)
+    rng                 = np.random.default_rng(len(primary_obs))
     combo, combo_idx    = next_combo(run_counts, all_combos, rng)
 
-    if len(observations) < N_SOBOL:
-        u    = sobol_continuous(seed=len(observations), n_cont=n_cont)
+    n_primary = len(primary_obs)
+    if n_primary < N_SOBOL:
+        u    = sobol_continuous(seed=n_primary, n_cont=n_cont)
         cont = _unit_to_cont(u, cont_params)
         mode = "sobol"
     else:
