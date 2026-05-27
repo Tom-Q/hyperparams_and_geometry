@@ -194,15 +194,53 @@ def next_combo(run_counts, all_combos, rng=None):
 
 
 # ---------------------------------------------------------------------------
+# Combo exclusion via GP UCB upper bound
+# ---------------------------------------------------------------------------
+
+def _combo_ucb_max(gp, combo, cont_params, cat_params, beta, n_candidates=1000):
+    """Max UCB over a Sobol grid for a combo with its categoricals fixed."""
+    n_cont = len(cont_params)
+    engine = SobolEngine(dimension=n_cont, scramble=True, seed=0)
+    unit_cont = engine.draw(n_candidates).double()
+
+    cat_indices = torch.tensor(
+        [float(choices.index(combo[name])) for name, choices in cat_params],
+        dtype=torch.double,
+    )
+    cat_part = cat_indices.unsqueeze(0).expand(n_candidates, -1)
+    X_cand = torch.cat([unit_cont, cat_part], dim=1)  # (n_cand, d)
+
+    with torch.no_grad():
+        posterior = gp.posterior(X_cand)
+        mean      = posterior.mean.squeeze(-1)
+        variance  = posterior.variance.squeeze(-1).clamp_min(0)
+        ucb       = mean + beta * variance.sqrt()
+
+    return float(ucb.max())
+
+
+def get_active_combos(gp, all_combos, cont_params, cat_params, success_threshold, beta):
+    """Return combos whose UCB upper bound exceeds success_threshold.
+
+    If none pass (shouldn't happen), falls back to all combos.
+    """
+    active = [
+        c for c in all_combos
+        if _combo_ucb_max(gp, c, cont_params, cat_params, beta) >= success_threshold
+    ]
+    return active if active else all_combos
+
+
+# ---------------------------------------------------------------------------
 # Top-level: suggest next full config
 # ---------------------------------------------------------------------------
 
 def suggest_next(observations, task, beta=8.0):
     """
-    Select least-visited categorical combo, then:
-      - Sobol sample for continuous dims if total obs < N_SOBOL
-      - Otherwise: MixedSingleTaskGP suggestion with that combo fixed
-    Returns (config dict, combo_idx, mode_str).
+    Sobol phase: round-robin over all combos, quasi-random continuous dims.
+    GP phase: fit GP, exclude combos whose UCB max < success_threshold,
+              round-robin over remaining combos, optimise continuous dims.
+    Returns (config dict, combo_idx_in_all_combos, mode_str).
     """
     cont_params = _cont_params_for_task(task)
     cat_params  = cat_params_for_task(task)
@@ -210,22 +248,30 @@ def suggest_next(observations, task, beta=8.0):
     n_cont      = len(cont_params)
     bounds      = _make_bounds(cont_params, cat_params)
 
-    primary_obs         = get_primary_observations(observations)
-    run_counts          = build_run_counts(primary_obs, all_combos, cat_params)
-    rng                 = np.random.default_rng(len(primary_obs))
-    combo, combo_idx    = next_combo(run_counts, all_combos, rng)
+    primary_obs = get_primary_observations(observations)
+    n_primary   = len(primary_obs)
+    rng         = np.random.default_rng(n_primary)
 
-    n_primary = len(primary_obs)
     if n_primary < N_SOBOL:
+        run_counts       = build_run_counts(primary_obs, all_combos, cat_params)
+        combo, combo_idx = next_combo(run_counts, all_combos, rng)
         u    = sobol_continuous(seed=n_primary, n_cont=n_cont)
         cont = _unit_to_cont(u, cont_params)
         mode = "sobol"
     else:
         X, Y = build_XY(observations, cont_params, cat_params)
         gp   = fit_gp(X, Y, n_cont)
+
+        active_combos        = get_active_combos(gp, all_combos, cont_params, cat_params,
+                                                  task.success_threshold, beta)
+        run_counts_active    = build_run_counts(primary_obs, active_combos, cat_params)
+        combo, _             = next_combo(run_counts_active, active_combos, rng)
+        combo_idx            = next(i for i, c in enumerate(all_combos)
+                                    if _combo_key(c) == _combo_key(combo))
+
         u    = suggest_continuous_for_combo(gp, combo, bounds, cat_params, n_cont, beta)
         cont = _unit_to_cont(u, cont_params)
-        mode = "gp"
+        mode = f"gp ({len(active_combos)}/{len(all_combos)} combos active)"
 
     config = {**combo, **cont}
     if "hidden_size"  in config: config["hidden_size"]  = int(config["hidden_size"])
