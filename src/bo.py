@@ -350,13 +350,16 @@ def get_all_combos(task):
 # State persistence
 # ---------------------------------------------------------------------------
 
-def save_state(path, observations):
+def save_state(path, observations, s3_bucket=None, task_name=None):
     def _default(obj):
         if isinstance(obj, np.integer): return int(obj)
         if isinstance(obj, np.floating): return float(obj)
         raise TypeError(type(obj))
     with open(path, "w") as f:
         json.dump(observations, f, indent=2, default=_default)
+    if s3_bucket and task_name:
+        import boto3
+        boto3.client("s3").upload_file(str(path), s3_bucket, f"{task_name}/bo_state.json")
 
 
 def load_state(path):

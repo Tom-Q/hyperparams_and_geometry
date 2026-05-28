@@ -8,3 +8,4 @@ experiments_test/
 rdm_stimuli.npz
 *.npz
 *.npy
+secrets/

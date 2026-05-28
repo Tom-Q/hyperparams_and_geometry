@@ -13,6 +13,8 @@ Every 4 primary iterations a repeat of the most recent primary is inserted
 """
 import argparse
 import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -29,6 +31,7 @@ from src.bo import (
 )
 
 STATE_FILE = "bo_state.json"
+S3_SYNC_EVERY = 20  # full experiment dir sync interval (cloud runs only)
 
 
 def parse_args():
@@ -100,8 +103,19 @@ def _pending_repeat(observations):
     return observations[last_primary_idx]["config"], last_primary_idx
 
 
+def _s3_sync(local_dir, s3_bucket, task_name):
+    """Sync local experiment directory to S3. Failures are logged but do not abort the run."""
+    result = subprocess.run(
+        ["aws", "s3", "sync", str(local_dir), f"s3://{s3_bucket}/{task_name}/"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        print(f"  [S3 sync warning] {result.stderr.strip()}")
+
+
 def main():
     args = parse_args()
+    s3_bucket = os.environ.get("S3_BUCKET")
 
     task       = TASKS[args.task]()
     output_dir = Path(args.output_dir) / args.task
@@ -177,7 +191,15 @@ def main():
             "is_repeat":   is_repeat,
             "repeat_of":   repeat_of_idx if is_repeat else None,
         })
-        save_state(state_path, observations)
+        save_state(state_path, observations, s3_bucket=s3_bucket, task_name=args.task)
+
+        if s3_bucket and (iteration + 1) % S3_SYNC_EVERY == 0:
+            print("  [S3] syncing experiment directory...")
+            _s3_sync(output_dir, s3_bucket, args.task)
+
+    if s3_bucket:
+        print("\n[S3] final sync...")
+        _s3_sync(output_dir, s3_bucket, args.task)
 
     print(f"\nDone. {len(observations)} total runs.")
     primary_final  = get_primary_observations(observations)
