@@ -26,6 +26,7 @@ class MNIST10WayTask(Task):
     output_size       = 10
     n_steps           = None
     success_threshold = 0.90
+    chance_accuracy   = 0.1      # 10-way classification
     metric_name       = "val_acc"
 
     def get_data(self, data_dir="data", seed=42):

@@ -48,6 +48,7 @@ class ParityTask(Task):
     l2_range_hi       = 1e-2
     max_epochs        = 100
     success_threshold = 0.95
+    chance_accuracy   = 0.5      # binary classification
     metric_name       = "val_acc"
 
     def get_data(self, data_dir="data", seed=42):

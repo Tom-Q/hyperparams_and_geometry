@@ -84,6 +84,7 @@ class FourRoomsTask(Task):
     output_size       = N_ACTIONS
     n_steps           = None
     success_threshold = 0.8    # set empirically after pre-testing
+    chance_accuracy   = 0.0   # RL task; raw return used as GP target
     metric_name       = "mean_return"
     max_steps         = 2_000_000
 

@@ -31,6 +31,7 @@ class CartPoleTask(Task):
     output_size       = 2   # Q-values for left/right
     n_steps           = None
     success_threshold = 195.0   # CartPole-v1 standard: avg return ≥ 195 over 100 eps
+    chance_accuracy   = 0.0     # RL task; raw return used as GP target
     metric_name       = "mean_return"
     max_steps         = 500_000
 

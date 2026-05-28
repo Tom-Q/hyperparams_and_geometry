@@ -40,6 +40,7 @@ class AddingTask(Task):
     output_size       = 1
     n_steps           = T
     success_threshold = 0.02   # MSE < 0.02 counts as a successful network
+    chance_accuracy   = 0.0    # regression; no meaningful chance baseline
     metric_name       = "val_mse"
     rdm_time_indices  = RDM_TIME_INDICES
 

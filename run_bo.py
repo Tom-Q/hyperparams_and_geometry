@@ -1,9 +1,12 @@
 """
-Stratified round-robin Bayesian optimisation over a single task.
+Saturating Bayesian optimisation over a single task.
+
+Acquisition (GP phase): A(x) = [μ(x) + sqrt(β)·σ(x)] / (1 + N_eff(x))
+Sobol phase: round-robin over categorical combos, quasi-random continuous dims.
 
 Usage:
     python run_bo.py --task spirals [--n-iter 300] [--output-dir experiments]
-                     [--beta 8.0] [--max-epochs 100]
+                     [--beta 4.0] [--h 0.2] [--lam 0.1] [--max-epochs 100]
 
 Every 4 primary iterations a repeat of the most recent primary is inserted
 (P P P P R pattern), giving a ~20% repeat rate for aleatoric noise estimation.
@@ -35,7 +38,14 @@ def parse_args():
     p.add_argument("--n-iter",      type=int,   default=300)
     p.add_argument("--output-dir",  type=str,   default="experiments")
     p.add_argument("--data-dir",    type=str,   default="data")
-    p.add_argument("--beta",        type=float, default=8.0)
+    p.add_argument("--beta",         type=float, default=4.0,
+                   help="UCB exploration weight (sqrt(beta) × σ convention)")
+    p.add_argument("--h",           type=float, default=0.2,
+                   help="N_eff RBF bandwidth in normalised [0,1] space")
+    p.add_argument("--lam",         type=float, default=0.1,
+                   help="N_eff weight for unordered categorical mismatches")
+    p.add_argument("--n-candidates", type=int,  default=2048,
+                   help="Sobol grid size per GP acquisition step")
     p.add_argument("--max-epochs",  type=int,   default=None,
                    help="Override task's max_epochs (e.g. 5 for a quick smoke test)")
     return p.parse_args()
@@ -130,7 +140,11 @@ def main():
             is_repeat = True
             print(f"[{iteration+1}/{args.n_iter}]  REPEAT of run_{repeat_of_idx:04d}  (noise pair)")
         else:
-            config, combo_idx, mode = suggest_next(observations, task, beta=args.beta)
+            config, combo_idx, mode = suggest_next(
+                observations, task,
+                beta=args.beta, h=args.h, lam=args.lam,
+                n_candidates=args.n_candidates,
+            )
             is_repeat = False
             primary_now = get_primary_observations(observations)
             counts_now  = build_run_counts(primary_now, all_combos, cat_params)

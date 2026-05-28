@@ -1,19 +1,16 @@
 """
-Stratified round-robin Bayesian optimisation with MixedSingleTaskGP.
+Saturating Bayesian optimisation with MixedSingleTaskGP.
 
-Design
-------
-The GP sees ALL observations with both continuous AND categorical dims encoded.
-Round-robin over the task's categorical combos guarantees balanced coverage.
+Acquisition (GP phase):
+    A(x) = [μ(x) + sqrt(β)·σ(x)] / (1 + N_eff(x))
 
-For each iteration:
-  1. Pick the least-visited categorical combo (round-robin).
-  2. If total observations < N_SOBOL: draw a Sobol point for the continuous dims.
-  3. Otherwise: fit MixedSingleTaskGP on all data, fix the selected combo's
-     categorical dims, optimise the acquisition over continuous dims only.
+N_eff measures the effective local sample density; once a region saturates the
+acquisition value drops and the optimiser naturally moves elsewhere.
+
+GP target: normalised accuracy y = (raw - chance) / (1 - chance), clamped [0, 1].
 
 Input tensor layout (N × (N_CONT + N_CAT)):
-  dims 0 .. N_CONT-1 : continuous, normalised to [0,1] via log-transform
+  dims 0 .. N_CONT-1 : continuous, log-normalised to [0, 1]
   dims N_CONT ..      : categorical indices (float, treated as categorical by the GP)
 """
 
@@ -32,6 +29,10 @@ from gpytorch.mlls import ExactMarginalLogLikelihood
 from torch.quasirandom import SobolEngine
 
 N_SOBOL = 100
+
+# Categorical params whose values are ordinal (numeric, log-scale ordering).
+# These use log-normalised ordinal distance in N_eff rather than binary mismatch.
+ORDINAL_PARAMS = {"hidden_size", "batch_size", "depth", "n_rnn_layers"}
 
 
 # ---------------------------------------------------------------------------
@@ -78,14 +79,14 @@ def _make_bounds(cont_params, cat_params):
 # Encoding helpers
 # ---------------------------------------------------------------------------
 
+def _cont_to_unit_val(value, raw_lo, raw_hi):
+    """Map a single continuous value to [0, 1] on log scale."""
+    return (math.log(value) - math.log(raw_lo)) / (math.log(raw_hi) - math.log(raw_lo))
+
+
 def _cont_to_unit(config, cont_params):
-    row = []
-    for name, raw_lo, raw_hi in cont_params:
-        v  = math.log(config[name])
-        lo = math.log(raw_lo)
-        hi = math.log(raw_hi)
-        row.append((v - lo) / (hi - lo))
-    return row
+    return [_cont_to_unit_val(config[name], raw_lo, raw_hi)
+            for name, raw_lo, raw_hi in cont_params]
 
 
 def _unit_to_cont(unit_row, cont_params):
@@ -102,6 +103,21 @@ def _cat_to_indices(config, cat_params):
     return [float(choices.index(config[name])) for name, choices in cat_params]
 
 
+def _ord_to_unit(value, choices):
+    """Log-normalise an ordinal categorical value to [0, 1]."""
+    if len(choices) == 1:
+        return 0.0
+    try:
+        logs = [math.log(c) for c in choices]
+        lo, hi = logs[0], logs[-1]
+        if hi == lo:
+            return 0.0
+        return (math.log(value) - lo) / (hi - lo)
+    except (TypeError, ValueError):
+        idx = choices.index(value)
+        return idx / (len(choices) - 1)
+
+
 def encode_config(config, cont_params, cat_params):
     row = _cont_to_unit(config, cont_params) + _cat_to_indices(config, cat_params)
     return torch.tensor(row, dtype=torch.double)
@@ -111,10 +127,23 @@ def get_primary_observations(observations):
     return [o for o in observations if not o.get("is_repeat", False)]
 
 
-def build_XY(observations, cont_params, cat_params):
+# ---------------------------------------------------------------------------
+# Accuracy normalisation
+# ---------------------------------------------------------------------------
+
+def _normalise_metric(raw, chance_accuracy):
+    """Normalise raw metric to [0, 1] relative to chance. Clamped."""
+    denom = max(1e-6, 1.0 - chance_accuracy)
+    return float(np.clip((raw - chance_accuracy) / denom, 0.0, 1.0))
+
+
+def build_XY(observations, cont_params, cat_params, chance_accuracy=0.0):
     X = torch.stack([encode_config(o["config"], cont_params, cat_params)
                      for o in observations])
-    Y = torch.tensor([[o["mean_metric"]] for o in observations], dtype=torch.double)
+    Y = torch.tensor(
+        [[_normalise_metric(o["mean_metric"], chance_accuracy)] for o in observations],
+        dtype=torch.double,
+    )
     return X, Y
 
 
@@ -131,28 +160,41 @@ def fit_gp(X, Y, n_cont):
 
 
 # ---------------------------------------------------------------------------
-# Acquisition optimisation
+# N_eff: effective local sample count
 # ---------------------------------------------------------------------------
 
-def _fixed_features_for_combo(combo, cat_params, n_cont):
-    return {
-        n_cont + j: float(choices.index(combo[name]))
-        for j, (name, choices) in enumerate(cat_params)
-    }
+def compute_n_eff(x_query, observations, cont_params, cat_params, h=0.2, lam=0.1):
+    """
+    Compute N_eff(x_query) = Σ_i K(x_query, x_i) over primary observations,
+    where K = exp(-d²(x, x_i) / 2h²) and d² uses log-continuous + ordinal +
+    λ-weighted unordered categorical distances.
 
-
-def suggest_continuous_for_combo(gp, combo, bounds, cat_params, n_cont, beta=8.0):
-    acqf = qUpperConfidenceBound(model=gp, beta=beta)
-    candidate, _ = optimize_acqf_mixed(
-        acq_function        = acqf,
-        bounds              = bounds,
-        fixed_features_list = [_fixed_features_for_combo(combo, cat_params, n_cont)],
-        q                   = 1,
-        num_restarts        = 10,
-        raw_samples         = 128,
-    )
-    unit_cont = candidate.squeeze(0)[:n_cont]
-    return unit_cont
+    x_query: config dict.
+    Repeat observations are excluded.
+    """
+    if not observations:
+        return 0.0
+    h2 = 2.0 * h * h
+    total = 0.0
+    for obs in observations:
+        if obs.get("is_repeat"):
+            continue
+        xi = obs["config"]
+        d2 = 0.0
+        for name, raw_lo, raw_hi in cont_params:
+            u  = _cont_to_unit_val(x_query[name], raw_lo, raw_hi)
+            ui = _cont_to_unit_val(xi[name],      raw_lo, raw_hi)
+            d2 += (u - ui) ** 2
+        for name, choices in cat_params:
+            if name in ORDINAL_PARAMS:
+                o  = _ord_to_unit(x_query[name], choices)
+                oi = _ord_to_unit(xi[name],      choices)
+                d2 += (o - oi) ** 2
+            else:
+                if x_query[name] != xi[name]:
+                    d2 += lam
+        total += math.exp(-d2 / h2)
+    return total
 
 
 # ---------------------------------------------------------------------------
@@ -161,12 +203,11 @@ def suggest_continuous_for_combo(gp, combo, bounds, cat_params, n_cont, beta=8.0
 
 def sobol_continuous(seed, n_cont):
     engine = SobolEngine(dimension=n_cont, scramble=True, seed=seed)
-    u = engine.draw(1).double().squeeze(0)
-    return u
+    return engine.draw(1).double().squeeze(0)
 
 
 # ---------------------------------------------------------------------------
-# Round-robin combo selection
+# Round-robin combo selection (used during Sobol phase)
 # ---------------------------------------------------------------------------
 
 def _combo_key(combo):
@@ -194,60 +235,80 @@ def next_combo(run_counts, all_combos, rng=None):
 
 
 # ---------------------------------------------------------------------------
-# Combo exclusion via GP UCB upper bound
+# Saturating acquisition: UCB / (1 + N_eff), evaluated on a Sobol grid
 # ---------------------------------------------------------------------------
 
-def _combo_ucb_max(gp, combo, cont_params, cat_params, beta, n_candidates=1000):
-    """Max UCB over a Sobol grid for a combo with its categoricals fixed."""
-    n_cont = len(cont_params)
-    engine = SobolEngine(dimension=n_cont, scramble=True, seed=0)
-    unit_cont = engine.draw(n_candidates).double()
-
-    cat_indices = torch.tensor(
-        [float(choices.index(combo[name])) for name, choices in cat_params],
-        dtype=torch.double,
-    )
-    cat_part = cat_indices.unsqueeze(0).expand(n_candidates, -1)
-    X_cand = torch.cat([unit_cont, cat_part], dim=1)  # (n_cand, d)
-
-    with torch.no_grad():
-        posterior = gp.posterior(X_cand)
-        mean      = posterior.mean.squeeze(-1)
-        variance  = posterior.variance.squeeze(-1).clamp_min(0)
-        # Use sqrt(beta) × σ to match BoTorch's qUpperConfidenceBound convention
-        ucb       = mean + math.sqrt(beta) * variance.sqrt()
-
-    return float(ucb.max())
-
-
-def get_active_combos(gp, all_combos, cont_params, cat_params, success_threshold, beta):
-    """Return combos whose UCB upper bound exceeds success_threshold.
-
-    If none pass (shouldn't happen), falls back to all combos.
+def _suggest_saturating(gp, primary_observations, cont_params, cat_params, beta,
+                         h=0.2, lam=0.1, n_candidates=2048):
     """
-    active = [
-        c for c in all_combos
-        if _combo_ucb_max(gp, c, cont_params, cat_params, beta) >= success_threshold
+    Enumerate a Sobol grid of candidates, compute A(x) = UCB(x) / (1 + N_eff(x))
+    for each, and return the unit-continuous row and combo dict of the argmax.
+    """
+    n_cont    = len(cont_params)
+    all_combos = [
+        dict(zip([nm for nm, _ in cat_params], vals))
+        for vals in iproduct(*[ch for _, ch in cat_params])
     ]
-    return active if active else all_combos
+
+    engine = SobolEngine(dimension=n_cont, scramble=True, seed=len(primary_observations))
+    unit_cont_grid = engine.draw(n_candidates).double()  # (n_candidates, n_cont)
+
+    best_acq   = -float("inf")
+    best_unit  = None
+    best_combo = None
+
+    sqrt_beta = math.sqrt(beta)
+
+    for combo in all_combos:
+        cat_indices = torch.tensor(
+            [float(choices.index(combo[name])) for name, choices in cat_params],
+            dtype=torch.double,
+        )
+        cat_part = cat_indices.unsqueeze(0).expand(n_candidates, -1)
+        X_cand   = torch.cat([unit_cont_grid, cat_part], dim=1)
+
+        with torch.no_grad():
+            posterior = gp.posterior(X_cand)
+            mean      = posterior.mean.squeeze(-1)           # (n_candidates,)
+            variance  = posterior.variance.squeeze(-1).clamp_min(0)
+            ucb       = mean + sqrt_beta * variance.sqrt()   # (n_candidates,)
+
+        # Compute N_eff for each candidate in this combo
+        for k in range(n_candidates):
+            unit_row = unit_cont_grid[k]
+            # Build config dict for this candidate
+            config_cand = {**combo, **_unit_to_cont(unit_row, cont_params)}
+            neff = compute_n_eff(config_cand, primary_observations, cont_params, cat_params,
+                                 h=h, lam=lam)
+            acq = float(ucb[k]) / (1.0 + neff)
+            if acq > best_acq:
+                best_acq   = acq
+                best_unit  = unit_row.clone()
+                best_combo = combo
+
+    return best_unit, best_combo
 
 
 # ---------------------------------------------------------------------------
 # Top-level: suggest next full config
 # ---------------------------------------------------------------------------
 
-def suggest_next(observations, task, beta=8.0):
+def suggest_next(observations, task, beta=4.0, h=0.2, lam=0.1, n_candidates=2048):
     """
-    Sobol phase: round-robin over all combos, quasi-random continuous dims.
-    GP phase: fit GP, exclude combos whose UCB max < success_threshold,
-              round-robin over remaining combos, optimise continuous dims.
+    Sobol phase (n_primary < N_SOBOL):
+        Round-robin over all combos, quasi-random continuous dims.
+
+    GP phase (n_primary >= N_SOBOL):
+        Fit GP on normalised accuracy, evaluate A(x) = UCB(x) / (1 + N_eff(x))
+        on a Sobol grid of candidates across all combos, return the argmax.
+
     Returns (config dict, combo_idx_in_all_combos, mode_str).
     """
     cont_params = _cont_params_for_task(task)
     cat_params  = cat_params_for_task(task)
     all_combos  = _all_combos_for_task(task)
     n_cont      = len(cont_params)
-    bounds      = _make_bounds(cont_params, cat_params)
+    chance      = getattr(task, "chance_accuracy", 0.0)
 
     primary_obs = get_primary_observations(observations)
     n_primary   = len(primary_obs)
@@ -260,19 +321,18 @@ def suggest_next(observations, task, beta=8.0):
         cont = _unit_to_cont(u, cont_params)
         mode = "sobol"
     else:
-        X, Y = build_XY(observations, cont_params, cat_params)
+        X, Y = build_XY(observations, cont_params, cat_params, chance_accuracy=chance)
         gp   = fit_gp(X, Y, n_cont)
 
-        active_combos        = get_active_combos(gp, all_combos, cont_params, cat_params,
-                                                  task.success_threshold, beta)
-        run_counts_active    = build_run_counts(primary_obs, active_combos, cat_params)
-        combo, _             = next_combo(run_counts_active, active_combos, rng)
-        combo_idx            = next(i for i, c in enumerate(all_combos)
-                                    if _combo_key(c) == _combo_key(combo))
-
-        u    = suggest_continuous_for_combo(gp, combo, bounds, cat_params, n_cont, beta)
-        cont = _unit_to_cont(u, cont_params)
-        mode = f"gp ({len(active_combos)}/{len(all_combos)} combos active)"
+        best_unit, best_combo = _suggest_saturating(
+            gp, primary_obs, cont_params, cat_params, beta,
+            h=h, lam=lam, n_candidates=n_candidates,
+        )
+        combo     = best_combo
+        combo_idx = next(i for i, c in enumerate(all_combos)
+                         if _combo_key(c) == _combo_key(combo))
+        cont = _unit_to_cont(best_unit, cont_params)
+        mode = "gp-saturating"
 
     config = {**combo, **cont}
     if "hidden_size"  in config: config["hidden_size"]  = int(config["hidden_size"])
@@ -304,3 +364,63 @@ def load_state(path):
         return []
     with open(path) as f:
         return json.load(f)
+
+
+# ---------------------------------------------------------------------------
+# Legacy helpers (used by run_spirals_culling_test*.py; not part of main path)
+# ---------------------------------------------------------------------------
+
+def _make_bounds_legacy(cont_params, cat_params):
+    return _make_bounds(cont_params, cat_params)
+
+
+def suggest_continuous_for_combo(gp, combo, bounds, cat_params, n_cont, beta=8.0):
+    acqf = qUpperConfidenceBound(model=gp, beta=beta)
+    from botorch.optim import optimize_acqf_mixed
+    candidate, _ = optimize_acqf_mixed(
+        acq_function        = acqf,
+        bounds              = bounds,
+        fixed_features_list = [_fixed_features_for_combo(combo, cat_params, n_cont)],
+        q                   = 1,
+        num_restarts        = 10,
+        raw_samples         = 128,
+    )
+    return candidate.squeeze(0)[:n_cont]
+
+
+def _fixed_features_for_combo(combo, cat_params, n_cont):
+    return {
+        n_cont + j: float(choices.index(combo[name]))
+        for j, (name, choices) in enumerate(cat_params)
+    }
+
+
+def _combo_ucb_max(gp, combo, cont_params, cat_params, beta, n_candidates=1000):
+    """Max UCB over a Sobol grid for a fixed combo (legacy culling scripts)."""
+    n_cont = len(cont_params)
+    engine = SobolEngine(dimension=n_cont, scramble=True, seed=0)
+    unit_cont = engine.draw(n_candidates).double()
+
+    cat_indices = torch.tensor(
+        [float(choices.index(combo[name])) for name, choices in cat_params],
+        dtype=torch.double,
+    )
+    cat_part = cat_indices.unsqueeze(0).expand(n_candidates, -1)
+    X_cand = torch.cat([unit_cont, cat_part], dim=1)
+
+    with torch.no_grad():
+        posterior = gp.posterior(X_cand)
+        mean      = posterior.mean.squeeze(-1)
+        variance  = posterior.variance.squeeze(-1).clamp_min(0)
+        ucb       = mean + math.sqrt(beta) * variance.sqrt()
+
+    return float(ucb.max())
+
+
+def get_active_combos(gp, all_combos, cont_params, cat_params, success_threshold, beta):
+    """Legacy: return combos whose UCB upper bound exceeds success_threshold."""
+    active = [
+        c for c in all_combos
+        if _combo_ucb_max(gp, c, cont_params, cat_params, beta) >= success_threshold
+    ]
+    return active if active else all_combos
