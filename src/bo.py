@@ -214,7 +214,8 @@ def _combo_ucb_max(gp, combo, cont_params, cat_params, beta, n_candidates=1000):
         posterior = gp.posterior(X_cand)
         mean      = posterior.mean.squeeze(-1)
         variance  = posterior.variance.squeeze(-1).clamp_min(0)
-        ucb       = mean + beta * variance.sqrt()
+        # Use sqrt(beta) × σ to match BoTorch's qUpperConfidenceBound convention
+        ucb       = mean + math.sqrt(beta) * variance.sqrt()
 
     return float(ucb.max())
 
