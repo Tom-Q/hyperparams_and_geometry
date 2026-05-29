@@ -100,9 +100,13 @@ def _pending_repeat(observations):
 
 
 def _s3_sync(local_dir, s3_bucket, task_name):
-    """Sync local experiment directory to S3. Failures are logged but do not abort the run."""
+    """Upload bo_state.json to S3. Network weights are not uploaded."""
+    state_file = Path(local_dir) / "bo_state.json"
+    if not state_file.exists():
+        return
     result = subprocess.run(
-        ["aws", "s3", "sync", str(local_dir), f"s3://{s3_bucket}/{task_name}/"],
+        ["aws", "s3", "cp", str(state_file),
+         f"s3://{s3_bucket}/{task_name}/bo_state.json"],
         capture_output=True, text=True,
     )
     if result.returncode != 0:
