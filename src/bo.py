@@ -47,9 +47,6 @@ def _cont_params_for_task(task):
 
     Includes learning_rate, l1_reg, l2_reg, plus any CONT_FROM_CAT params
     present in the task's categorical_space (hidden_size, batch_size).
-    For batch_size the lower bound is set to 0.75 × the task's minimum choice
-    so that ~16% of the log-range rounds to the minimum, giving reasonable
-    coverage of small batch sizes.
     """
     l1_hi = getattr(task, "l1_range_hi", 1e-2)
     l2_hi = getattr(task, "l2_range_hi", 1e-2)
@@ -64,9 +61,7 @@ def _cont_params_for_task(task):
         params.append(("hidden_size", float(min(choices)), float(max(choices))))
     if "batch_size" in cat_space:
         choices = cat_space["batch_size"]
-        lo = float(min(choices)) * 0.75
-        hi = float(max(choices))
-        params.append(("batch_size", lo, hi))
+        params.append(("batch_size", float(min(choices)), float(max(choices))))
     return params
 
 
@@ -145,9 +140,16 @@ def _ord_to_unit(value, choices):
         return idx / (len(choices) - 1)
 
 
-def encode_config(config, cont_params, cat_params):
-    row = _cont_to_unit(config, cont_params) + _cat_to_indices(config, cat_params)
-    return torch.tensor(row, dtype=torch.double)
+def encode_config(obs, cont_params, cat_params):
+    """Encode an observation dict to a unit-space tensor.
+
+    Uses obs["cont_unit_vals"] (raw optimizer/Sobol u values) when present,
+    so the GP sees the actual explored point rather than the snapped integer value.
+    Falls back to recomputing from obs["config"] for legacy observations.
+    """
+    cont_row = obs.get("cont_unit_vals") or _cont_to_unit(obs["config"], cont_params)
+    cat_row  = _cat_to_indices(obs["config"], cat_params)
+    return torch.tensor(cont_row + cat_row, dtype=torch.double)
 
 
 def get_primary_observations(observations):
@@ -165,7 +167,7 @@ def _normalise_metric(raw, chance_accuracy):
 
 
 def build_XY(observations, cont_params, cat_params, chance_accuracy=0.0):
-    X = torch.stack([encode_config(o["config"], cont_params, cat_params)
+    X = torch.stack([encode_config(o, cont_params, cat_params)
                      for o in observations])
     Y = torch.tensor(
         [[_normalise_metric(o["mean_metric"], chance_accuracy)] for o in observations],
@@ -288,9 +290,13 @@ class UCBoverNeff(AnalyticAcquisitionFunction):
         self.n_dims = len(cont_params) + len(cat_params)
 
         # Continuous obs unit values: (n_obs, n_cont)
-        self.register_buffer("obs_cont", torch.tensor([
-            [_cont_to_unit_val(o["config"][name], lo, hi) for name, lo, hi in cont_params]
-            for o in primary_observations], dtype=torch.double))
+        # Use stored raw unit values when available (avoids snapping back to integer grid).
+        def _cont_units(o):
+            if "cont_unit_vals" in o:
+                return o["cont_unit_vals"][:len(cont_params)]
+            return [_cont_to_unit_val(o["config"][name], lo, hi) for name, lo, hi in cont_params]
+        self.register_buffer("obs_cont", torch.tensor(
+            [_cont_units(o) for o in primary_observations], dtype=torch.double))
 
         # For each cat dim: store obs values and (for ordinal) a unit-value lookup table.
         ord_obs_cols, unord_obs_cols = [], []
@@ -406,7 +412,12 @@ def suggest_next(observations, task, beta=4.0, h=0.2):
         Fit GP on normalised accuracy, evaluate A(x) = UCB(x) / (1 + N_eff(x))
         on a Sobol grid of candidates across all combos, return the argmax.
 
-    Returns (config dict, combo_idx_in_all_combos, mode_str).
+    Returns (config dict, combo_idx_in_all_combos, mode_str, cont_unit_vals).
+
+    cont_unit_vals is a list of floats — the raw [0,1] unit values for the
+    continuous dims before rounding. Callers should store this in the
+    observation dict so the GP sees the actual explored point, not the
+    snapped integer value.
     """
     cont_params = _cont_params_for_task(task)
     cat_params  = cat_params_for_task(task)
@@ -423,6 +434,7 @@ def suggest_next(observations, task, beta=4.0, h=0.2):
         combo, combo_idx = next_combo(run_counts, all_combos, rng)
         u    = sobol_continuous(seed=n_primary, n_cont=n_cont)
         cont = _unit_to_cont(u, cont_params)
+        cont_unit_vals = [float(v) for v in u]
         mode = "sobol"
     else:
         X, Y = build_XY(observations, cont_params, cat_params, chance_accuracy=chance)
@@ -435,15 +447,13 @@ def suggest_next(observations, task, beta=4.0, h=0.2):
         combo_idx = next(i for i, c in enumerate(all_combos)
                          if _combo_key(c) == _combo_key(combo))
         cont = _unit_to_cont(best_unit, cont_params)
+        cont_unit_vals = [float(v) for v in best_unit]
         mode = "gp-saturating"
 
     config = {**combo, **cont}
-    # hidden_size and batch_size are already rounded integers from _unit_to_cont.
-    # depth and n_rnn_layers come from categorical choices (already ints) but
-    # may arrive as numpy ints — cast for safety.
     if "depth"        in config: config["depth"]        = int(config["depth"])
     if "n_rnn_layers" in config: config["n_rnn_layers"] = int(config["n_rnn_layers"])
-    return config, combo_idx, mode
+    return config, combo_idx, mode, cont_unit_vals
 
 
 def get_all_combos(task):

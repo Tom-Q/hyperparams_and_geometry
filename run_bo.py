@@ -146,11 +146,12 @@ def main():
         repeat_config, repeat_of_idx = _pending_repeat(observations)
 
         if repeat_config is not None:
-            config    = repeat_config
-            is_repeat = True
+            config         = repeat_config
+            cont_unit_vals = None
+            is_repeat      = True
             print(f"[{iteration+1}/{args.n_iter}]  REPEAT of run_{repeat_of_idx:04d}  (noise pair)")
         else:
-            config, combo_idx, mode = suggest_next(
+            config, combo_idx, mode, cont_unit_vals = suggest_next(
                 observations, task,
                 beta=args.beta, h=args.h,
             )
@@ -179,12 +180,13 @@ def main():
         print(f"  mean_metric = {val_acc:.4f}")
 
         observations.append({
-            "iteration":   iteration,
-            "config":      config,
-            "val_accs":    [val_acc],
-            "mean_metric": val_acc,
-            "is_repeat":   is_repeat,
-            "repeat_of":   repeat_of_idx if is_repeat else None,
+            "iteration":      iteration,
+            "config":         config,
+            "cont_unit_vals": cont_unit_vals if not is_repeat else None,
+            "val_accs":       [val_acc],
+            "mean_metric":    val_acc,
+            "is_repeat":      is_repeat,
+            "repeat_of":      repeat_of_idx if is_repeat else None,
         })
         save_state(state_path, observations, s3_bucket=s3_bucket, task_name=args.task)
 
