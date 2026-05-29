@@ -21,18 +21,21 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from botorch.acquisition import qUpperConfidenceBound
+from botorch.acquisition import AnalyticAcquisitionFunction, qUpperConfidenceBound
 from botorch.fit import fit_gpytorch_mll
 from botorch.models.gp_regression_mixed import MixedSingleTaskGP
-from botorch.optim import optimize_acqf_mixed
+from botorch.optim import optimize_acqf, optimize_acqf_mixed
 from gpytorch.mlls import ExactMarginalLogLikelihood
 from torch.quasirandom import SobolEngine
 
 N_SOBOL = 100
 
-# Categorical params whose values are ordinal (numeric, log-scale ordering).
-# These use log-normalised ordinal distance in N_eff rather than binary mismatch.
-ORDINAL_PARAMS = {"hidden_size", "batch_size", "depth", "n_rnn_layers"}
+# Params promoted from categorical to continuous (treated as log-continuous by the GP).
+# They are filtered out of cat_params and added to cont_params automatically.
+CONT_FROM_CAT = {"hidden_size", "batch_size"}
+
+# Remaining ordinal categoricals (numeric, log-scale ordering in N_eff).
+ORDINAL_PARAMS = {"depth", "n_rnn_layers"}
 
 
 # ---------------------------------------------------------------------------
@@ -40,20 +43,41 @@ ORDINAL_PARAMS = {"hidden_size", "batch_size", "depth", "n_rnn_layers"}
 # ---------------------------------------------------------------------------
 
 def _cont_params_for_task(task):
-    """Return list of (name, raw_lo, raw_hi) for continuous dims."""
+    """Return list of (name, raw_lo, raw_hi) for continuous dims.
+
+    Includes learning_rate, l1_reg, l2_reg, plus any CONT_FROM_CAT params
+    present in the task's categorical_space (hidden_size, batch_size).
+    For batch_size the lower bound is set to 0.75 × the task's minimum choice
+    so that ~16% of the log-range rounds to the minimum, giving reasonable
+    coverage of small batch sizes.
+    """
     l1_hi = getattr(task, "l1_range_hi", 1e-2)
     l2_hi = getattr(task, "l2_range_hi", 1e-2)
-    return [
+    params = [
         ("learning_rate", 1e-5, 1e-1),
         ("l1_reg",        1e-6, l1_hi),
         ("l2_reg",        1e-6, l2_hi),
     ]
+    cat_space = task.categorical_space()
+    if "hidden_size" in cat_space:
+        choices = cat_space["hidden_size"]
+        params.append(("hidden_size", float(min(choices)), float(max(choices))))
+    if "batch_size" in cat_space:
+        choices = cat_space["batch_size"]
+        lo = float(min(choices)) * 0.75
+        hi = float(max(choices))
+        params.append(("batch_size", lo, hi))
+    return params
 
 
 def cat_params_for_task(task):
-    """Return ordered list of (name, choices) for categorical dims."""
+    """Return ordered list of (name, choices) for categorical dims.
+
+    Params in CONT_FROM_CAT are excluded — they are handled as continuous.
+    """
     space = task.categorical_space()
-    return [(name, choices) for name, choices in space.items()]
+    return [(name, choices) for name, choices in space.items()
+            if name not in CONT_FROM_CAT]
 
 
 def _all_combos_for_task(task):
@@ -92,10 +116,13 @@ def _cont_to_unit(config, cont_params):
 def _unit_to_cont(unit_row, cont_params):
     result = {}
     for i, (name, raw_lo, raw_hi) in enumerate(cont_params):
-        u = unit_row[i] if not hasattr(unit_row[i], 'item') else unit_row[i].item()
+        u = unit_row[i].item() if hasattr(unit_row[i], 'item') else unit_row[i]
         u = float(np.clip(u, 0.0, 1.0))
         log_val = u * (math.log(raw_hi) - math.log(raw_lo)) + math.log(raw_lo)
-        result[name] = math.exp(log_val)
+        val = math.exp(log_val)
+        if name in CONT_FROM_CAT:
+            val = max(1, round(val))
+        result[name] = val
     return result
 
 
@@ -163,19 +190,22 @@ def fit_gp(X, Y, n_cont):
 # N_eff: effective local sample count
 # ---------------------------------------------------------------------------
 
-def compute_n_eff(x_query, observations, cont_params, cat_params, h=0.2, lam=0.1):
+def compute_n_eff(x_query, observations, cont_params, cat_params, h=0.2):
     """
     Compute N_eff(x_query) = Σ_i K(x_query, x_i) over primary observations,
-    where K = exp(-d²(x, x_i) / 2h²) and d² uses log-continuous + ordinal +
-    λ-weighted unordered categorical distances.
+    using Gower distance: each dimension contributes a value in [0, 1] and the
+    total is averaged over all dimensions.
 
-    x_query: config dict.
-    Repeat observations are excluded.
+    Continuous/ordinal dims: squared unit distance.
+    Unordered categorical dims: binary (0 same, 1 different).
+
+    x_query: config dict. Repeat observations are excluded.
     """
     if not observations:
         return 0.0
-    h2 = 2.0 * h * h
-    total = 0.0
+    n_dims = len(cont_params) + len(cat_params)
+    h2     = 2.0 * h * h
+    total  = 0.0
     for obs in observations:
         if obs.get("is_repeat"):
             continue
@@ -191,9 +221,8 @@ def compute_n_eff(x_query, observations, cont_params, cat_params, h=0.2, lam=0.1
                 oi = _ord_to_unit(xi[name],      choices)
                 d2 += (o - oi) ** 2
             else:
-                if x_query[name] != xi[name]:
-                    d2 += lam
-        total += math.exp(-d2 / h2)
+                d2 += float(x_query[name] != xi[name])
+        total += math.exp(-(d2 / n_dims) / h2)
     return total
 
 
@@ -235,65 +264,140 @@ def next_combo(run_counts, all_combos, rng=None):
 
 
 # ---------------------------------------------------------------------------
-# Saturating acquisition: UCB / (1 + N_eff), evaluated on a Sobol grid
+# UCB / (1 + N_eff) acquisition function (differentiable, for gradient optimisation)
 # ---------------------------------------------------------------------------
 
-def _suggest_saturating(gp, primary_observations, cont_params, cat_params, beta,
-                         h=0.2, lam=0.1, n_candidates=2048):
+class UCBoverNeff(AnalyticAcquisitionFunction):
     """
-    Enumerate a Sobol grid of candidates, compute A(x) = UCB(x) / (1 + N_eff(x))
-    for each, and return the unit-continuous row and combo dict of the argmax.
+    A(x) = [μ(x) + sqrt(β)·σ(x)] / (1 + N_eff(x))
+
+    Computes the full Gower distance between candidate x and every primary
+    observation directly from x — no precomputed per-combo quantities needed.
+    Safe to use with optimize_acqf_mixed across all categorical combos at once.
+
+    Continuous and ordinal dims: squared unit distance.
+    Unordered categorical dims: binary (0 same, 1 different).
+    All contributions divided by n_dims (Gower normalisation).
     """
-    n_cont    = len(cont_params)
+
+    def __init__(self, model, beta, primary_observations, cont_params, cat_params, h):
+        super().__init__(model=model)
+        self.register_buffer("sqrt_beta", torch.tensor(beta ** 0.5, dtype=torch.double))
+        self.h2     = 2.0 * h * h
+        self.n_cont = len(cont_params)
+        self.n_dims = len(cont_params) + len(cat_params)
+
+        # Continuous obs unit values: (n_obs, n_cont)
+        self.register_buffer("obs_cont", torch.tensor([
+            [_cont_to_unit_val(o["config"][name], lo, hi) for name, lo, hi in cont_params]
+            for o in primary_observations], dtype=torch.double))
+
+        # For each cat dim: store obs values and (for ordinal) a unit-value lookup table.
+        ord_obs_cols, unord_obs_cols = [], []
+        self.ord_cat_dims   = []   # positions within cat_params
+        self.unord_cat_dims = []
+
+        for j, (name, choices) in enumerate(cat_params):
+            obs_ints = [choices.index(o["config"][name]) for o in primary_observations]
+            if name in ORDINAL_PARAMS:
+                self.ord_cat_dims.append(j)
+                k = len(self.ord_cat_dims) - 1
+                lut = torch.tensor([_ord_to_unit(c, choices) for c in choices], dtype=torch.double)
+                self.register_buffer(f"_ord_lut_{k}", lut)
+                ord_obs_cols.append(torch.tensor([lut[i].item() for i in obs_ints], dtype=torch.double))
+            else:
+                self.unord_cat_dims.append(j)
+                unord_obs_cols.append(torch.tensor(obs_ints, dtype=torch.double))
+
+        if ord_obs_cols:
+            self.register_buffer("obs_ord",   torch.stack(ord_obs_cols,   dim=1))  # (n_obs, n_ord)
+        if unord_obs_cols:
+            self.register_buffer("obs_unord", torch.stack(unord_obs_cols, dim=1))  # (n_obs, n_unord)
+
+    def forward(self, X):
+        # X: (*batch, 1, n_dims)
+        mean, sigma = self._mean_and_sigma(X)
+        mean  = mean.squeeze(-1)
+        sigma = sigma.squeeze(-1)
+        ucb   = mean + self.sqrt_beta * sigma
+
+        x = X[..., 0, :]  # (*batch, n_dims)
+
+        # Continuous: squared distance in unit space — (*batch, n_obs)
+        x_cont  = x[..., :self.n_cont]
+        d2 = ((x_cont.unsqueeze(-2) - self.obs_cont) ** 2).sum(-1)
+
+        # Ordinal: squared distance between unit values (integer index → unit via LUT)
+        for k, j in enumerate(self.ord_cat_dims):
+            lut    = getattr(self, f"_ord_lut_{k}")             # (n_choices,)
+            x_unit = lut[x[..., self.n_cont + j].long()]       # (*batch,)
+            d2     = d2 + (x_unit.unsqueeze(-1) - self.obs_ord[:, k]) ** 2
+
+        # Unordered: binary (detached — categorical dims are fixed during opt)
+        for k, j in enumerate(self.unord_cat_dims):
+            x_idx  = x[..., self.n_cont + j]                   # (*batch,)
+            binary = (x_idx.unsqueeze(-1).round() != self.obs_unord[:, k].round()).float().detach()
+            d2     = d2 + binary
+
+        n_eff = torch.exp(-(d2 / self.n_dims) / self.h2).sum(-1)  # (*batch,)
+        return ucb / (1.0 + n_eff)
+
+
+# ---------------------------------------------------------------------------
+# Saturating acquisition: optimise UCBoverNeff jointly over all combos
+# ---------------------------------------------------------------------------
+
+def _suggest_saturating(gp, primary_observations, cont_params, cat_params, beta, h=0.2):
+    """
+    Build one UCBoverNeff acquisition function, then call optimize_acqf_mixed
+    with the full list of categorical combos.  BoTorch handles the joint
+    optimisation — one batched GP evaluation for all combos, gradient ascent
+    over continuous dims with categoricals fixed per combo.
+
+    Returns the continuous unit row and combo dict of the global argmax.
+    """
+    n_cont = len(cont_params)
+    n_dims = n_cont + len(cat_params)
+
     all_combos = [
         dict(zip([nm for nm, _ in cat_params], vals))
         for vals in iproduct(*[ch for _, ch in cat_params])
     ]
 
-    engine = SobolEngine(dimension=n_cont, scramble=True, seed=len(primary_observations))
-    unit_cont_grid = engine.draw(n_candidates).double()  # (n_candidates, n_cont)
+    acqf = UCBoverNeff(gp, beta, primary_observations, cont_params, cat_params, h)
 
-    best_acq   = -float("inf")
-    best_unit  = None
-    best_combo = None
+    bounds = torch.zeros(2, n_dims, dtype=torch.double)
+    bounds[1, :n_cont] = 1.0
+    for j, (_, choices) in enumerate(cat_params):
+        bounds[1, n_cont + j] = float(len(choices) - 1)
 
-    sqrt_beta = math.sqrt(beta)
+    fixed_features_list = [
+        {n_cont + j: float(choices.index(combo[name])) for j, (name, choices) in enumerate(cat_params)}
+        for combo in all_combos
+    ]
 
-    for combo in all_combos:
-        cat_indices = torch.tensor(
-            [float(choices.index(combo[name])) for name, choices in cat_params],
-            dtype=torch.double,
-        )
-        cat_part = cat_indices.unsqueeze(0).expand(n_candidates, -1)
-        X_cand   = torch.cat([unit_cont_grid, cat_part], dim=1)
+    candidate, _ = optimize_acqf_mixed(
+        acq_function       = acqf,
+        bounds             = bounds,
+        q                  = 1,
+        num_restarts       = 3,
+        raw_samples        = 32,
+        fixed_features_list = fixed_features_list,
+        options            = {"maxiter": 20},
+    )
 
-        with torch.no_grad():
-            posterior = gp.posterior(X_cand)
-            mean      = posterior.mean.squeeze(-1)           # (n_candidates,)
-            variance  = posterior.variance.squeeze(-1).clamp_min(0)
-            ucb       = mean + sqrt_beta * variance.sqrt()   # (n_candidates,)
+    best_cont = candidate.squeeze(0)[:n_cont].detach()
+    cat_idx   = candidate.squeeze(0)[n_cont:].round().long().tolist()
+    best_combo = {name: choices[cat_idx[j]] for j, (name, choices) in enumerate(cat_params)}
 
-        # Compute N_eff for each candidate in this combo
-        for k in range(n_candidates):
-            unit_row = unit_cont_grid[k]
-            # Build config dict for this candidate
-            config_cand = {**combo, **_unit_to_cont(unit_row, cont_params)}
-            neff = compute_n_eff(config_cand, primary_observations, cont_params, cat_params,
-                                 h=h, lam=lam)
-            acq = float(ucb[k]) / (1.0 + neff)
-            if acq > best_acq:
-                best_acq   = acq
-                best_unit  = unit_row.clone()
-                best_combo = combo
-
-    return best_unit, best_combo
+    return best_cont, best_combo
 
 
 # ---------------------------------------------------------------------------
 # Top-level: suggest next full config
 # ---------------------------------------------------------------------------
 
-def suggest_next(observations, task, beta=4.0, h=0.2, lam=0.1, n_candidates=2048):
+def suggest_next(observations, task, beta=4.0, h=0.2):
     """
     Sobol phase (n_primary < N_SOBOL):
         Round-robin over all combos, quasi-random continuous dims.
@@ -325,8 +429,7 @@ def suggest_next(observations, task, beta=4.0, h=0.2, lam=0.1, n_candidates=2048
         gp   = fit_gp(X, Y, n_cont)
 
         best_unit, best_combo = _suggest_saturating(
-            gp, primary_obs, cont_params, cat_params, beta,
-            h=h, lam=lam, n_candidates=n_candidates,
+            gp, primary_obs, cont_params, cat_params, beta, h=h,
         )
         combo     = best_combo
         combo_idx = next(i for i, c in enumerate(all_combos)
@@ -335,9 +438,10 @@ def suggest_next(observations, task, beta=4.0, h=0.2, lam=0.1, n_candidates=2048
         mode = "gp-saturating"
 
     config = {**combo, **cont}
-    if "hidden_size"  in config: config["hidden_size"]  = int(config["hidden_size"])
+    # hidden_size and batch_size are already rounded integers from _unit_to_cont.
+    # depth and n_rnn_layers come from categorical choices (already ints) but
+    # may arrive as numpy ints — cast for safety.
     if "depth"        in config: config["depth"]        = int(config["depth"])
-    if "batch_size"   in config: config["batch_size"]   = int(config["batch_size"])
     if "n_rnn_layers" in config: config["n_rnn_layers"] = int(config["n_rnn_layers"])
     return config, combo_idx, mode
 

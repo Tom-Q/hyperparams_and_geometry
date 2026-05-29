@@ -45,10 +45,6 @@ def parse_args():
                    help="UCB exploration weight (sqrt(beta) × σ convention)")
     p.add_argument("--h",           type=float, default=0.2,
                    help="N_eff RBF bandwidth in normalised [0,1] space")
-    p.add_argument("--lam",         type=float, default=0.1,
-                   help="N_eff weight for unordered categorical mismatches")
-    p.add_argument("--n-candidates", type=int,  default=2048,
-                   help="Sobol grid size per GP acquisition step")
     p.add_argument("--max-epochs",  type=int,   default=None,
                    help="Override task's max_epochs (e.g. 5 for a quick smoke test)")
     return p.parse_args()
@@ -156,8 +152,7 @@ def main():
         else:
             config, combo_idx, mode = suggest_next(
                 observations, task,
-                beta=args.beta, h=args.h, lam=args.lam,
-                n_candidates=args.n_candidates,
+                beta=args.beta, h=args.h,
             )
             is_repeat = False
             primary_now = get_primary_observations(observations)
