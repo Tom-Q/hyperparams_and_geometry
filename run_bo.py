@@ -14,7 +14,6 @@ Every 4 primary iterations a repeat of the most recent primary is inserted
 import argparse
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
 
@@ -100,17 +99,17 @@ def _pending_repeat(observations):
 
 
 def _s3_sync(local_dir, s3_bucket, task_name):
-    """Upload bo_state.json to S3. Network weights are not uploaded."""
+    """Upload bo_state.json to S3 via boto3. Network weights are not uploaded."""
     state_file = Path(local_dir) / "bo_state.json"
     if not state_file.exists():
         return
-    result = subprocess.run(
-        ["aws", "s3", "cp", str(state_file),
-         f"s3://{s3_bucket}/{task_name}/bo_state.json"],
-        capture_output=True, text=True,
-    )
-    if result.returncode != 0:
-        print(f"  [S3 sync warning] {result.stderr.strip()}")
+    try:
+        import boto3
+        boto3.client("s3").upload_file(
+            str(state_file), s3_bucket, f"{task_name}/bo_state.json"
+        )
+    except Exception as e:
+        print(f"  [S3 sync warning] {e}")
 
 
 def main():

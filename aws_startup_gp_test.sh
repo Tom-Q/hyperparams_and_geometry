@@ -3,9 +3,13 @@ set -e
 
 # Single-task GP test run — spirals, starting from scratch (Sobol then GP).
 # Paste this as EC2 User Data verbatim.
+#
+# NOTE: spirals generates all data procedurally — no downloads needed.
+# For MNIST/Fashion tasks, torchvision downloads ~200MB on first run.
+# For RNN/RL tasks, check tasks/<name>.py for data requirements before running.
 
 TASK_NAME="spirals"
-S3_BUCKET="thomas-hyperparams-bo"
+S3_BUCKET="tom-hyperparams-representations"
 REPO_URL="https://github.com/Tom-Q/hyperparams_and_geometry.git"
 BRANCH="saturating-bo"
 N_ITER=300   # ~100 Sobol + 200 GP iterations
@@ -24,9 +28,9 @@ cd project
 # --- Python environment ---
 python3 -m venv .venv
 source .venv/bin/activate
-pip install --quiet -r requirements.txt
+pip install -r requirements.txt
 
-# --- Run (boto3 handles per-iteration S3 uploads) ---
+# --- Run (boto3 handles per-iteration S3 uploads; crashes on S3 failure by design) ---
 export S3_BUCKET
 python run_bo.py \
     --task "$TASK_NAME" \
@@ -35,11 +39,26 @@ python run_bo.py \
     --beta "$BETA" \
     --h "$H"
 
-# --- Self-terminate via boto3 ---
+# --- Self-terminate via boto3 (requires ec2:TerminateInstances on IAM role) ---
 python - <<'EOF'
 import urllib.request, boto3
-meta = "http://169.254.169.254/latest/meta-data/"
-instance_id = urllib.request.urlopen(meta + "instance-id").read().decode()
-region      = urllib.request.urlopen(meta + "placement/region").read().decode()
+
+# IMDSv2: get a session token first
+token_req = urllib.request.Request(
+    "http://169.254.169.254/latest/api/token",
+    method="PUT",
+    headers={"X-aws-ec2-metadata-token-ttl-seconds": "21600"},
+)
+token = urllib.request.urlopen(token_req).read().decode()
+
+def imds(path):
+    req = urllib.request.Request(
+        f"http://169.254.169.254/latest/meta-data/{path}",
+        headers={"X-aws-ec2-metadata-token": token},
+    )
+    return urllib.request.urlopen(req).read().decode()
+
+instance_id = imds("instance-id")
+region      = imds("placement/region")
 boto3.client("ec2", region_name=region).terminate_instances(InstanceIds=[instance_id])
 EOF
