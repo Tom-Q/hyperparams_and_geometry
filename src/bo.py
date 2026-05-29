@@ -195,18 +195,15 @@ def fit_gp(X, Y, n_cont):
 def compute_n_eff(x_query, observations, cont_params, cat_params, h=0.2):
     """
     Compute N_eff(x_query) = Σ_i K(x_query, x_i) over primary observations,
-    using Gower distance: each dimension contributes a value in [0, 1] and the
-    total is averaged over all dimensions.
-
-    Continuous/ordinal dims: squared unit distance.
-    Unordered categorical dims: binary (0 same, 1 different).
+    Euclidean distance in unit space: squared unit distance for continuous/ordinal
+    dims, binary (0 same, 1 different) for unordered categorical dims.
+    No normalisation by number of dimensions.
 
     x_query: config dict. Repeat observations are excluded.
     """
     if not observations:
         return 0.0
-    n_dims = len(cont_params) + len(cat_params)
-    h2     = 2.0 * h * h
+    h2 = 2.0 * h * h
     total  = 0.0
     for obs in observations:
         if obs.get("is_repeat"):
@@ -224,7 +221,7 @@ def compute_n_eff(x_query, observations, cont_params, cat_params, h=0.2):
                 d2 += (o - oi) ** 2
             else:
                 d2 += float(x_query[name] != xi[name])
-        total += math.exp(-(d2 / n_dims) / h2)
+        total += math.exp(-d2 / h2)
     return total
 
 
@@ -279,7 +276,7 @@ class UCBoverNeff(AnalyticAcquisitionFunction):
 
     Continuous and ordinal dims: squared unit distance.
     Unordered categorical dims: binary (0 same, 1 different).
-    All contributions divided by n_dims (Gower normalisation).
+    Euclidean (no per-dimension normalisation).
     """
 
     def __init__(self, model, beta, primary_observations, cont_params, cat_params, h):
@@ -345,7 +342,7 @@ class UCBoverNeff(AnalyticAcquisitionFunction):
             binary = (x_idx.unsqueeze(-1).round() != self.obs_unord[:, k].round()).float().detach()
             d2     = d2 + binary
 
-        n_eff = torch.exp(-(d2 / self.n_dims) / self.h2).sum(-1)  # (*batch,)
+        n_eff = torch.exp(-d2 / self.h2).sum(-1)  # (*batch,)
         return ucb / (1.0 + n_eff)
 
 
