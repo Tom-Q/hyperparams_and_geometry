@@ -8,13 +8,13 @@ set -e
 # For MNIST/Fashion tasks, torchvision downloads ~200MB on first run.
 # For RNN/RL tasks, check tasks/<name>.py for data requirements before running.
 
-TASK_NAME="spirals"
+TASK_NAME="spirals"          # ← change this per instance
 S3_BUCKET="tom-hyperparams-representations"
 REPO_URL="https://github.com/Tom-Q/hyperparams_and_geometry.git"
 BRANCH="saturating-bo"
-N_ITER=300   # ~100 Sobol + 200 GP iterations
+N_ITER=400   # ~300 primaries accounting for ~25% repeats
 BETA=4.0
-H=0.1
+H=0.15
 
 # --- System setup ---
 apt-get update -q
@@ -29,6 +29,20 @@ cd project
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+
+# --- Download any existing state from S3 (resume if interrupted) ---
+mkdir -p "experiments/$TASK_NAME"
+python - <<PYEOF
+import boto3
+try:
+    boto3.client("s3").download_file(
+        "$S3_BUCKET", "$TASK_NAME/bo_state.json",
+        "experiments/$TASK_NAME/bo_state.json"
+    )
+    print("Resumed from existing S3 state.")
+except Exception as e:
+    print(f"No existing state, starting fresh. ({e})")
+PYEOF
 
 # --- Run (boto3 handles per-iteration S3 uploads; crashes on S3 failure by design) ---
 export S3_BUCKET
