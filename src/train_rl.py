@@ -60,7 +60,7 @@ def train_network(task, config, run_dir, rdm_inputs, env_factory,
     optimizer        = make_optimizer(model, config)
     criterion        = nn.MSELoss()
     l1_coef          = config["l1_reg"]
-    gamma            = float(config["gamma"])
+    gamma            = float(config.get("gamma", 0.99))
     stimuli_t        = stimuli_to_tensor(rdm_inputs)
     checkpoint_steps = set(log4_checkpoints(max_steps))
 

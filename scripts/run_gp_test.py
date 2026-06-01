@@ -13,10 +13,10 @@ import json
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
-SRC_STATE   = Path("experiments_saturating_test/spirals/bo_state.json")
-TEST_OUTPUT = Path("experiments_gp_test")
+SRC_STATE   = Path("output/experiments_saturating_test/spirals/bo_state.json")
+TEST_OUTPUT = Path("output/experiments_gp_test")
 N_SEED      = 100  # exactly N_SOBOL primaries to seed with
 
 

@@ -5,7 +5,7 @@ Acquisition (GP phase): A(x) = [μ(x) + sqrt(β)·σ(x)] / (1 + N_eff(x))
 Sobol phase: round-robin over categorical combos, quasi-random continuous dims.
 
 Usage:
-    python run_bo.py --task spirals [--n-iter 300] [--output-dir experiments]
+    python run_bo.py --task spirals [--n-iter 300] [--output-dir output/experiments]
                      [--beta 4.0] [--h 0.2] [--lam 0.1] [--max-epochs 100]
 
 Every 4 primary iterations a repeat of the most recent primary is inserted
@@ -38,7 +38,7 @@ def parse_args():
     p.add_argument("--task",        type=str,   required=True,
                    choices=list(TASKS.keys()))
     p.add_argument("--n-iter",      type=int,   default=300)
-    p.add_argument("--output-dir",  type=str,   default="experiments")
+    p.add_argument("--output-dir",  type=str,   default="output/experiments")
     p.add_argument("--data-dir",    type=str,   default="data")
     p.add_argument("--beta",         type=float, default=4.0,
                    help="UCB exploration weight (sqrt(beta) × σ convention)")

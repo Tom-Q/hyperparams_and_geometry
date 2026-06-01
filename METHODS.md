@@ -12,7 +12,7 @@ This project is a follow-up to Devolder, Colin & Holroyd (submitted 2026), which
 
 The present project extends this in three directions:
 
-1. **Depth.** Networks now have 1–3 hidden layers (with width halving across layers).
+1. **Depth.** Networks now have 1–2 hidden layers (with width halving across layers).
 2. **Scale.** Rather than a fixed grid, we use Bayesian optimisation (BO) to search continuous hyperparameter dimensions (learning rate, regularisation, hidden size) more efficiently, while maintaining stratified coverage of categorical dimensions.
 3. **Dynamics.** Activations are saved at logarithmically-spaced training checkpoints, enabling analysis of *how* representational geometry evolves during learning, not just its final state.
 
@@ -58,83 +58,128 @@ Hyperparameters are divided into **categorical** (discrete, fully enumerable) an
 
 ### 3.1 Categorical hyperparameters
 
-#### Supervised MLP and RL tasks
+`hidden_size` and `batch_size` are treated as **continuous** by the BO (see Section 3.2),
+so they do not appear in the categorical space.
+
+#### Supervised MLP tasks
 
 | Parameter | Values | Notes |
 |---|---|---|
-| `batch_size` | 1, 8, 64 | Online, mini-batch, and larger mini-batch |
-| `depth` | 1, 2 | Number of hidden layers; see architecture note below |
+| `depth` | 1, 2 | Number of hidden layers |
 | `activation` | sigmoid, tanh, relu | Applied to all hidden layers |
 | `optimizer` | sgd, adam | See Section 5.2 for details |
 | `init_scale` | 0.1, 1.0 | Multiplier applied after standard init; see Section 5.3 |
 
-This gives **3 × 2 × 3 × 2 × 2 = 72 categorical combinations** for supervised MLP tasks.
+This gives **2 × 3 × 2 × 2 = 24 categorical combinations**.
 
-RL tasks omit `batch_size` (not applicable to online Q-learning) and instead include `gamma` (discount factor: 0.9, 0.99).
+#### RL tasks
+
+Same categorical parameters as supervised MLP except `init_scale` ∈ {0.1, 1.0}
+and no `batch_size` (online Q-learning). Discount factor `gamma` is fixed at 0.99.
+→ **2 × 3 × 2 × 2 = 24 categorical combinations**.
 
 #### RNN tasks
 
 | Parameter | Values |
 |---|---|
-| `batch_size` | 8, 64 |
 | `cell_type` | rnn (Elman), gru |
 | `n_rnn_layers` | 1, 2 |
 | `optimizer` | sgd, adam |
 | `init_scale` | 0.01, 1.0 |
 
-This gives **2 × 2 × 2 × 2 × 2 = 32 categorical combinations** for RNN tasks.
+This gives **2 × 2 × 2 × 2 = 16 categorical combinations** for RNN tasks.
 
 ### 3.2 Continuous hyperparameters
 
-All four continuous hyperparameters are optimised on a log scale. The BO encodes them as a unit-normalised log value in [0, 1] internally.
+All continuous hyperparameters are optimised on a log scale, encoded as unit-normalised
+log values in [0, 1] internally. `hidden_size` and `batch_size` are continuous in the
+BO but rounded to integers when training a network; the pre-rounding values are stored
+in `bo_state.json` as `cont_unit_vals`.
 
-| Parameter | Range | Scale | Notes |
+| Parameter | Range | Paradigms | Notes |
 |---|---|---|---|
-| `hidden_size` | [4, 1024] (supervised); task-specific otherwise | log | Rounded to nearest integer after decoding; see architecture note |
-| `learning_rate` | [1×10⁻⁵, 1×10⁻¹] | log | Passed directly to optimizer |
-| `l1_reg` | [1×10⁻⁶, 1×10⁻²] | log | Coefficient on explicit L1 penalty; applied to weight matrices only |
-| `l2_reg` | [1×10⁻⁶, 1×10⁻²] | log | Passed as `weight_decay` to optimizer |
+| `hidden_size` | [16, 256] | all | Rounded to nearest integer |
+| `batch_size` | [1, 64] (supervised/RL); [8, 64] (RNN) | supervised, RNN | Rounded to nearest integer |
+| `learning_rate` | [1×10⁻⁵, 1×10⁻¹] | all | Passed directly to optimizer |
+| `l1_reg` | [1×10⁻⁶, 1×10⁻²] | all | Explicit L1 penalty on weight matrices only |
+| `l2_reg` | [1×10⁻⁶, 1×10⁻²] | all | Passed as `weight_decay` to optimizer |
 
-`hidden_size` ranges are task-specific and set conservatively to avoid very large networks on simple tasks (e.g., spirals and parity cap at 256).
+RL tasks have no `batch_size` continuous dim (online Q-learning, batch size = 1 implicitly).
 
 ---
 
 ## 4. Bayesian Optimisation
 
-### 4.1 Strategy
+### 4.1 Overview
 
-The BO uses a **stratified round-robin** approach to ensure balanced coverage of the categorical space:
+The acquisition function is **UCB-over-N_eff**:
 
-1. At each iteration, select the categorical combo with the fewest observations so far (ties broken by combo index, i.e., lexicographic order on the first pass).
-2. Given the selected categorical combo, choose continuous hyperparameters either via Sobol sampling (first 20 total observations) or GP acquisition (thereafter).
+```
+A(x) = [μ(x) + sqrt(β)·σ(x)] / (1 + N_eff(x))
+```
 
-This decouples categorical and continuous search: every categorical combo is visited at roughly the same rate, while the GP refines the continuous values per combo as data accumulates.
+where μ(x) and σ(x) are the GP posterior mean and std of normalised accuracy, and
+N_eff(x) is an effective local sample count that saturates regions already well-explored.
+This naturally balances exploitation (GP UCB) with coverage (N_eff denominator) without
+requiring explicit round-robin or culling in the GP phase.
 
-### 4.2 Gaussian Process
+### 4.2 Phases
 
-We use **`MixedSingleTaskGP`** from BoTorch, which handles mixed continuous/categorical inputs natively. The GP sees all observations jointly — it is not separate per categorical combo — which allows it to share information across combos.
+**Sobol phase** (first N_SOBOL = 100 observations): quasi-random Sobol sequence for
+continuous dims, with round-robin over categorical combos to ensure all are visited
+at least once before the GP takes over.
+
+**GP phase** (N_SOBOL onwards): fit a GP, optimise A(x) jointly over all categorical
+combos and continuous dims, select the global argmax.
+
+### 4.3 Gaussian Process
+
+**Model:** `MixedSingleTaskGP` (BoTorch) — one GP over all observations jointly,
+not one per categorical combo. Cross-combo information sharing is handled by the
+mixed kernel.
 
 **Input encoding:**
-- Continuous dimensions: log-transformed and normalised to [0, 1]
-- Categorical dimensions: integer indices (0, 1, 2, ...) treated as categorical by the GP kernel
+- Continuous dims (including hidden_size, batch_size): log-transformed, normalised to [0,1]
+- Ordinal categoricals (depth, n_rnn_layers): mapped to [0,1] via log-scale rank
+- Unordered categoricals (activation, optimizer, init_scale, etc.): integer indices
 
-**Acquisition function:** q-Upper Confidence Bound (qUCB) with β = 8.0 (default; tunable via `--beta`). A high β favours exploration.
+**Target:** normalised accuracy `y = (raw - chance) / (1 - chance)`, clamped to [0,1].
 
-**Acquisition optimisation:** `optimize_acqf_mixed` from BoTorch. The categorical dimensions are fixed to the selected combo (via `fixed_features_list`); optimisation runs over the 4 continuous dimensions only. Parameters: 10 restarts, 128 raw samples.
+**MLL fitting:** `ExactMarginalLogLikelihood` via `fit_gpytorch_mll` (L-BFGS-B).
 
-**MLL fitting:** `ExactMarginalLogLikelihood`, fit via `fit_gpytorch_mll` (BoTorch default L-BFGS-B).
+### 4.4 N_eff
 
-### 4.3 Initialisation
+```
+N_eff(x) = Σ_i  exp(-d²(x, x_i) / 2h²)
+```
 
-The first **N_SOBOL = 20** configurations use a Sobol sequence for the continuous dimensions (scrambled, with `seed = len(observations)` at the time of suggestion — deterministic given run order). This ensures space-filling coverage before the GP is fitted.
+summed over primary observations only (repeats excluded). Distance is Euclidean
+in unit space: squared distance for continuous and ordinal dims, binary (0/1) for
+unordered categoricals. Default **h = 0.15**.
 
-### 4.4 Scoring
+### 4.5 Acquisition optimisation
 
-The metric used as the BO objective is `mean_metric`: the mean raw validation metric across `runs_per_config` repetitions of a given configuration. Raw values are passed directly to the GP with no penalty or thresholding, so the GP sees the full gradient from chance-level performance up through successful networks. The `success_threshold` is used only for reporting (flagging runs as OK or FAILED in the console output).
+`optimize_acqf_mixed` (BoTorch) with all categorical combos in `fixed_features_list`.
+Continuous dims are optimised jointly via gradient ascent with categoricals fixed
+per combo. Parameters: 3 restarts, 32 raw samples, 20 L-BFGS-B iterations.
 
-### 4.5 State persistence
+### 4.6 Scoring
 
-After every iteration, the full observation history is written to `bo_state.json` in the task's output directory. This makes runs **resumable after interruption**: on restart, the script loads existing observations and continues from where it left off. The Sobol seed is deterministic given `len(observations)`, so the sequence is reproducible.
+`mean_metric` is the raw validation metric (no penalty or thresholding). The GP
+sees the full gradient from chance-level up through successful networks.
+`success_threshold` is used only for console reporting.
+
+### 4.7 State persistence
+
+After every iteration, the full observation history is written to `bo_state.json`
+and uploaded to S3 (cloud runs). Runs are resumable: on restart, the script loads
+existing observations and continues from where it left off.
+
+### 4.8 Repeat infrastructure
+
+Every 4th primary observation triggers a noise-estimation repeat of a previous config
+(P P P P R pattern). Repeats are not counted in N_eff and are not selected by the
+acquisition function — they exist solely to estimate intra-config variance.
 
 ---
 
@@ -148,7 +193,7 @@ A fully connected feedforward network with the following width schedule:
 input → H → H//2 → H//4 → ... → output
 ```
 
-where H is `hidden_size` and each successive layer halves the width. The number of hidden layers equals `depth` (1, 2, or 3). No dropout.
+where H is `hidden_size` and each successive layer halves the width. The number of hidden layers equals `depth` (1 or 2). No dropout.
 
 **Special case:** If `hidden_size < 8`, `depth` is capped at 2, because `H // 4` would be less than 2 units (degenerate). The effective depth after this cap is stored as `effective_depth` in the saved metadata.
 
@@ -206,9 +251,11 @@ All linear layers (including the RNN readout head) are initialised with:
 - **ReLU networks:** Kaiming normal (`fan_in` mode)
 - **Sigmoid / tanh / RNN networks:** Xavier normal
 
-After standard initialisation, all weights are **scaled by `init_scale`** (multiplicative). `init_scale` ∈ {0.01, 1.0}. Biases are always initialised to zero.
+After standard initialisation, all weights are **scaled by `init_scale`** (multiplicative).
+Biases are always initialised to zero.
 
-This means `init_scale = 0.01` produces near-zero initial weights (strong regularisation effect at initialisation), while `init_scale = 1.0` uses the standard initialisation directly.
+`init_scale` ∈ {0.1, 1.0} across all tasks. `init_scale = 0.1` produces near-zero
+initial weights; `init_scale = 1.0` uses the standard initialisation directly.
 
 ### 6.4 Early stopping
 
@@ -230,7 +277,7 @@ Additionally, activations are always saved at the **final step** (current weight
 
 ## 7. Output Files
 
-For each trained network, the following files are written under `experiments/<task>/run_NNNN_rR/`:
+For each trained network, the following files are written under `output/experiments/<task>/run_NNNN_rR/`:
 
 | File | Contents |
 |---|---|
@@ -241,21 +288,26 @@ For each trained network, the following files are written under `experiments/<ta
 | `best.npz` | Activations from `model_best.pt` weights |
 | `final.npz` | Activations from end-of-training weights |
 
-At the task level, `experiments/<task>/bo_state.json` stores the full observation history:
+At the task level, `output/experiments/<task>/bo_state.json` stores the full observation history:
 
 ```json
 [
   {
     "iteration": 0,
     "config": { ... },
+    "cont_unit_vals": [0.42, 0.71, ...],
     "val_accs": [0.923],
-    "mean_metric": 0.923
+    "mean_metric": 0.923,
+    "is_repeat": false,
+    "repeat_of": null
   },
   ...
 ]
 ```
 
-`mean_metric` is the scored mean (with penalty applied for failed runs). `val_accs` are the raw values before scoring.
+`cont_unit_vals` stores the raw pre-rounding unit values for continuous dims (used by
+the GP to see the actual explored location, not the snapped integer). `mean_metric` is
+the raw validation metric passed to the GP. `val_accs` are per-repetition values.
 
 ---
 

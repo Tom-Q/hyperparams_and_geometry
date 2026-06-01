@@ -3,7 +3,7 @@ set -e
 
 # --- Configuration ---
 TASK_NAME="__TASK__"          # replaced at launch time by launch_all_tasks.sh
-S3_BUCKET="thomas-hyperparams-bo"
+S3_BUCKET="tom-hyperparams-representations"
 REPO_URL="https://github.com/Tom-Q/hyperparams_and_geometry.git"
 N_ITER=400
 BETA=4.0

@@ -31,13 +31,13 @@ source .venv/bin/activate
 pip install -r requirements.txt
 
 # --- Download any existing state from S3 (resume if interrupted) ---
-mkdir -p "experiments/$TASK_NAME"
+mkdir -p "output/experiments/$TASK_NAME"
 python - <<PYEOF
 import boto3
 try:
     boto3.client("s3").download_file(
         "$S3_BUCKET", "$TASK_NAME/bo_state.json",
-        "experiments/$TASK_NAME/bo_state.json"
+        "output/experiments/$TASK_NAME/bo_state.json"
     )
     print("Resumed from existing S3 state.")
 except Exception as e:
@@ -49,7 +49,7 @@ export S3_BUCKET
 python run_bo.py \
     --task "$TASK_NAME" \
     --n-iter "$N_ITER" \
-    --output-dir experiments \
+    --output-dir output/experiments \
     --beta "$BETA" \
     --h "$H"
 
