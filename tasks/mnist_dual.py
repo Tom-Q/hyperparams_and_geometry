@@ -13,7 +13,7 @@ class MNISTDualTask(Task):
     output_size       = 1
     n_steps           = None
     success_threshold = 0.90
-    chance_accuracy   = 0.5      # binary classification
+    chance_perf       = 0.5      # binary classification
     metric_name       = "val_acc"
 
     def get_data(self, data_dir="data", seed=42):

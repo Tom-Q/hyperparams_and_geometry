@@ -94,7 +94,7 @@ def main():
     task        = TASKS["spirals"]()
     cont_params = _cont_params_for_task(task)
     cat_params  = cat_params_for_task(task)
-    chance      = getattr(task, "chance_accuracy", 0.0)
+    chance      = getattr(task, "chance_perf", 0.0)
     n_cont      = len(cont_params)
 
     fixed = {
@@ -129,7 +129,7 @@ def main():
 
     acq_maps = []
     for label, obs in snapshots:
-        X, Y = build_XY(obs, cont_params, cat_params, chance_accuracy=chance)
+        X, Y = build_XY(obs, cont_params, cat_params, chance_perf=chance)
         gp   = fit_gp(X, Y, n_cont)
         acqf = UCBoverNeff(gp, args.beta, obs, cont_params, cat_params, args.h)
         with torch.no_grad():

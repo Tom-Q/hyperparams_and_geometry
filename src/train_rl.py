@@ -1,5 +1,6 @@
 """Online Q-learning training loop (no experience replay, batch=1)."""
 import json
+import time
 from pathlib import Path
 
 import numpy as np
@@ -10,9 +11,9 @@ from .model_mlp import MLP
 from .rdm import save_activations_mlp, stimuli_to_tensor
 from .utils import log4_checkpoints, make_optimizer, l1_penalty
 
-EPSILON       = 0.1    # fixed ε for ε-greedy; not a GP variable
-EVAL_INTERVAL = 1000   # environment steps between mean-return evaluations
-N_EVAL_EPISODES = 10   # episodes averaged per evaluation
+EPSILON         = 0.1   # default ε (used when no decay schedule given)
+EVAL_INTERVAL   = 1000  # default steps between evaluations
+N_EVAL_EPISODES = 10    # episodes averaged per evaluation
 
 
 def _eval_mean_return(model, env_factory, n_episodes, device):
@@ -38,7 +39,9 @@ def _eval_mean_return(model, env_factory, n_episodes, device):
 
 
 def train_network(task, config, run_dir, rdm_inputs, env_factory,
-                  device=None, max_steps_override=None, verbose=False):
+                  device=None, max_steps_override=None, verbose=False,
+                  epsilon_start=EPSILON, epsilon_end=0.0, epsilon_decay_steps=None,
+                  eval_interval=EVAL_INTERVAL):
     """Online Q-learning. Returns best mean_return (float)."""
     run_dir = Path(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -65,6 +68,7 @@ def train_network(task, config, run_dir, rdm_inputs, env_factory,
     checkpoint_steps = set(log4_checkpoints(max_steps))
 
     history = []
+    t0 = time.time()
 
     env         = env_factory()
     global_step = 0
@@ -77,10 +81,16 @@ def train_network(task, config, run_dir, rdm_inputs, env_factory,
     while global_step < max_steps:
         global_step += 1
 
+        if epsilon_decay_steps is not None and epsilon_decay_steps > 0:
+            epsilon = max(epsilon_end,
+                         epsilon_start - (epsilon_start - epsilon_end) * global_step / epsilon_decay_steps)
+        else:
+            epsilon = epsilon_start
+
         s      = torch.tensor(obs, dtype=torch.float32).unsqueeze(0).to(device)
         q_vals = model(s).squeeze(0)
 
-        if np.random.random() < EPSILON:
+        if np.random.random() < epsilon:
             action = env.action_space.sample()
         else:
             action = q_vals.detach().argmax().item()
@@ -105,7 +115,7 @@ def train_network(task, config, run_dir, rdm_inputs, env_factory,
             save_activations_mlp(model, stimuli_t,
                                  run_dir / f"step_{global_step:07d}", device)
 
-        if global_step % EVAL_INTERVAL == 0:
+        if global_step % eval_interval == 0:
             mean_ret = _eval_mean_return(model, env_factory, N_EVAL_EPISODES, device)
             history.append({"step": global_step, "mean_return": round(float(mean_ret), 4)})
             if mean_ret > best_return:
@@ -113,8 +123,10 @@ def train_network(task, config, run_dir, rdm_inputs, env_factory,
                 best_step   = global_step
                 torch.save(model.state_dict(), run_dir / "model_best.pt")
             if verbose:
+                elapsed = round(time.time() - t0)
                 tag = "  *** SOLVED ***" if mean_ret >= task.success_threshold else ""
-                print(f"  step {global_step:8,}  mean_return={mean_ret:7.2f}{tag}", flush=True)
+                print(f"  t={elapsed:4d}s  step {global_step:8,}  mean_return={mean_ret:7.2f}  ε={epsilon:.3f}{tag}",
+                      flush=True)
             if mean_ret >= task.success_threshold:
                 break
 

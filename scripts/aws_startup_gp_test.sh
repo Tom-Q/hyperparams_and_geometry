@@ -12,7 +12,7 @@ TASK_NAME="spirals"          # ← change this per instance
 S3_BUCKET="tom-hyperparams-representations"
 REPO_URL="https://github.com/Tom-Q/hyperparams_and_geometry.git"
 BRANCH="saturating-bo"
-N_ITER=400   # ~300 primaries accounting for ~25% repeats
+N_ITER=400
 BETA=4.0
 H=0.15
 

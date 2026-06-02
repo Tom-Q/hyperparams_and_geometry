@@ -318,7 +318,7 @@ def main():
     task        = TASKS["spirals"]()
     cont_params = _cont_params_for_task(task)
     cat_params  = cat_params_for_task(task)
-    chance      = getattr(task, "chance_accuracy", 0.0)
+    chance      = getattr(task, "chance_perf", 0.0)
     n_cont      = len(cont_params)
 
     slices = [
@@ -340,7 +340,7 @@ def main():
     gps = []
     for n in snap_counts:
         obs = primaries[:n]
-        X, Y = build_XY(obs, cont_params, cat_params, chance_accuracy=chance)
+        X, Y = build_XY(obs, cont_params, cat_params, chance_perf=chance)
         gps.append(fit_gp(X, Y, n_cont))
         print(f"  GP fitted on {n} obs")
 

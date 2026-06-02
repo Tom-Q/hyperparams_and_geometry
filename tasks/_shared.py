@@ -23,5 +23,5 @@ RL_CATS = {
     "depth":       [1, 2],
     "activation":  ["sigmoid", "tanh", "relu"],
     "optimizer":   ["sgd", "adam"],
-    "init_scale":  [0.01, 1.0],
+    "init_scale":  [0.1, 1.0],
 }

@@ -51,7 +51,7 @@ class SpiralsTask(Task):
     output_size       = 3
     n_steps           = None
     success_threshold = 0.85
-    chance_accuracy   = 1 / 3    # 3-way classification
+    chance_perf       = 1 / 3    # 3-way classification
     metric_name       = "val_acc"
     max_epochs        = 300
 

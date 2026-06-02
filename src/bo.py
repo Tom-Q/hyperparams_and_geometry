@@ -160,17 +160,17 @@ def get_primary_observations(observations):
 # Accuracy normalisation
 # ---------------------------------------------------------------------------
 
-def _normalise_metric(raw, chance_accuracy):
-    """Normalise raw metric to [0, 1] relative to chance. Clamped."""
-    denom = max(1e-6, 1.0 - chance_accuracy)
-    return float(np.clip((raw - chance_accuracy) / denom, 0.0, 1.0))
+def _normalise_metric(raw, chance_perf, max_metric):
+    """Normalise raw metric to [0, 1] between chance performance and max. Clamped."""
+    denom = max(1e-6, max_metric - chance_perf)
+    return float(np.clip((raw - chance_perf) / denom, 0.0, 1.0))
 
 
-def build_XY(observations, cont_params, cat_params, chance_accuracy=0.0):
+def build_XY(observations, cont_params, cat_params, chance_perf=0.0, max_metric=1.0):
     X = torch.stack([encode_config(o, cont_params, cat_params)
                      for o in observations])
     Y = torch.tensor(
-        [[_normalise_metric(o["mean_metric"], chance_accuracy)] for o in observations],
+        [[_normalise_metric(o["mean_metric"], chance_perf, max_metric)] for o in observations],
         dtype=torch.double,
     )
     return X, Y
@@ -400,7 +400,7 @@ def _suggest_saturating(gp, primary_observations, cont_params, cat_params, beta,
 # Top-level: suggest next full config
 # ---------------------------------------------------------------------------
 
-def suggest_next(observations, task, beta=4.0, h=0.2):
+def suggest_next(observations, task, beta=4.0, h=0.2, n_sobol=N_SOBOL):
     """
     Sobol phase (n_primary < N_SOBOL):
         Round-robin over all combos, quasi-random continuous dims.
@@ -420,13 +420,14 @@ def suggest_next(observations, task, beta=4.0, h=0.2):
     cat_params  = cat_params_for_task(task)
     all_combos  = _all_combos_for_task(task)
     n_cont      = len(cont_params)
-    chance      = getattr(task, "chance_accuracy", 0.0)
+    chance      = getattr(task, "chance_perf", 0.0)
+    max_metric  = getattr(task, "max_metric",  1.0)
 
     primary_obs = get_primary_observations(observations)
     n_primary   = len(primary_obs)
     rng         = np.random.default_rng(n_primary)
 
-    if n_primary < N_SOBOL:
+    if n_primary < n_sobol:
         run_counts       = build_run_counts(primary_obs, all_combos, cat_params)
         combo, combo_idx = next_combo(run_counts, all_combos, rng)
         u    = sobol_continuous(seed=n_primary, n_cont=n_cont)
@@ -434,7 +435,7 @@ def suggest_next(observations, task, beta=4.0, h=0.2):
         cont_unit_vals = [float(v) for v in u]
         mode = "sobol"
     else:
-        X, Y = build_XY(observations, cont_params, cat_params, chance_accuracy=chance)
+        X, Y = build_XY(observations, cont_params, cat_params, chance_perf=chance, max_metric=max_metric)
         gp   = fit_gp(X, Y, n_cont)
 
         best_unit, best_combo = _suggest_saturating(

@@ -22,11 +22,12 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).parent))
 
 from tasks import TASKS
-from src.train_supervised import train_network
+from src.train_supervised import train_network as train_supervised
+from src.train_rl import train_network as train_rl
 from src.bo import (
     get_all_combos, cat_params_for_task, suggest_next,
     save_state, load_state, build_run_counts,
-    get_primary_observations,
+    get_primary_observations, N_SOBOL,
 )
 
 STATE_FILE = "bo_state.json"
@@ -38,36 +39,63 @@ def parse_args():
     p.add_argument("--task",        type=str,   required=True,
                    choices=list(TASKS.keys()))
     p.add_argument("--n-iter",      type=int,   default=300)
+    p.add_argument("--n-sobol",     type=int,   default=None,
+                   help="Sobol phase length (default: bo.N_SOBOL=100)")
     p.add_argument("--output-dir",  type=str,   default="output/experiments")
     p.add_argument("--data-dir",    type=str,   default="data")
     p.add_argument("--beta",         type=float, default=4.0,
                    help="UCB exploration weight (sqrt(beta) × σ convention)")
     p.add_argument("--h",           type=float, default=0.2,
                    help="N_eff RBF bandwidth in normalised [0,1] space")
-    p.add_argument("--max-epochs",  type=int,   default=None,
-                   help="Override task's max_epochs (e.g. 5 for a quick smoke test)")
+    p.add_argument("--max-epochs",       type=int,   default=None,
+                   help="Override task's max_epochs/max_steps")
+    p.add_argument("--epsilon-start",    type=float, default=None,
+                   help="RL: starting epsilon (default: train_rl.EPSILON)")
+    p.add_argument("--epsilon-end",      type=float, default=0.0,
+                   help="RL: final epsilon after decay (default: 0.0)")
+    p.add_argument("--epsilon-decay-steps", type=int, default=None,
+                   help="RL: steps over which epsilon decays linearly to epsilon-end")
+    p.add_argument("--eval-interval",   type=int,   default=None,
+                   help="RL: steps between evaluations (default: train_rl.EVAL_INTERVAL)")
     return p.parse_args()
 
 
 def run_config(task, config, run_id_base, output_dir, rdm_inputs,
-               ds_train, ds_val, max_epochs_override):
+               ds_train=None, ds_val=None, env_factory=None, max_epochs_override=None,
+               epsilon_start=None, epsilon_end=0.0, epsilon_decay_steps=None, eval_interval=None):
     run_dir = Path(output_dir) / f"{run_id_base}_r0"
     print(f"    ->  {run_dir.name}")
 
-    val_acc = train_network(
-        task                = task,
-        config              = config,
-        run_dir             = run_dir,
-        rdm_inputs          = rdm_inputs,
-        ds_train            = ds_train,
-        ds_val              = ds_val,
-        max_epochs_override = max_epochs_override,
-        verbose             = True,
-    )
+    if task.paradigm == "rl":
+        from src.train_rl import EPSILON, EVAL_INTERVAL
+        metric = train_rl(
+            task                 = task,
+            config               = config,
+            run_dir              = run_dir,
+            rdm_inputs           = rdm_inputs,
+            env_factory          = env_factory,
+            max_steps_override   = max_epochs_override,
+            verbose              = True,
+            epsilon_start        = epsilon_start if epsilon_start is not None else EPSILON,
+            epsilon_end          = epsilon_end,
+            epsilon_decay_steps  = epsilon_decay_steps,
+            eval_interval        = eval_interval if eval_interval is not None else EVAL_INTERVAL,
+        )
+    else:
+        metric = train_supervised(
+            task                = task,
+            config              = config,
+            run_dir             = run_dir,
+            rdm_inputs          = rdm_inputs,
+            ds_train            = ds_train,
+            ds_val              = ds_val,
+            max_epochs_override = max_epochs_override,
+            verbose             = True,
+        )
 
-    flag = "OK" if val_acc >= task.success_threshold else "FAILED"
-    print(f"        val_acc={val_acc:.4f}  [{flag}]")
-    return val_acc
+    flag = "OK" if metric >= task.success_threshold else "FAILED"
+    print(f"        mean_metric={metric:.4f}  [{flag}]")
+    return metric
 
 
 def _pending_repeat(observations):
@@ -127,8 +155,14 @@ def main():
     print(f"Task: {task.name}  ({len(all_combos)} categorical combos)")
 
     print("Loading data...")
-    ds_train, ds_val = task.get_data(data_dir=args.data_dir)
-    print(f"  train={len(ds_train)}  val={len(ds_val)}")
+    if task.paradigm == "rl":
+        env_factory = task.get_data(data_dir=args.data_dir)
+        ds_train = ds_val = None
+        print("  RL task: env_factory loaded")
+    else:
+        ds_train, ds_val = task.get_data(data_dir=args.data_dir)
+        env_factory = None
+        print(f"  train={len(ds_train)}  val={len(ds_val)}")
 
     rdm_inputs, _ = task.get_rdm_stimuli(data_dir=args.data_dir)
     print(f"  RDM stimuli: {rdm_inputs.shape}")
@@ -157,6 +191,7 @@ def main():
             config, combo_idx, mode, cont_unit_vals = suggest_next(
                 observations, task,
                 beta=args.beta, h=args.h,
+                n_sobol=args.n_sobol if args.n_sobol is not None else N_SOBOL,
             )
             is_repeat = False
             primary_now = get_primary_observations(observations)
@@ -177,7 +212,12 @@ def main():
             rdm_inputs          = rdm_inputs,
             ds_train            = ds_train,
             ds_val              = ds_val,
-            max_epochs_override = args.max_epochs,
+            env_factory          = env_factory,
+            max_epochs_override  = args.max_epochs,
+            epsilon_start        = args.epsilon_start,
+            epsilon_end          = args.epsilon_end,
+            epsilon_decay_steps  = args.epsilon_decay_steps,
+            eval_interval        = args.eval_interval,
         )
 
         print(f"  mean_metric = {val_acc:.4f}")
