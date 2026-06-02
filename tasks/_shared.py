@@ -15,14 +15,13 @@ RNN_CATS = {
     "cell_type":    ["rnn", "gru"],
     "n_rnn_layers": [1, 2],
     "optimizer":    ["sgd", "adam"],
-    "init_scale":   [0.01, 1.0],
+    "init_scale":   [0.1, 1.0],
 }
 
 RL_CATS = {
     "hidden_size": [16, 256],
-    "depth":       [1, 2, 3],
+    "depth":       [1, 2],
     "activation":  ["sigmoid", "tanh", "relu"],
     "optimizer":   ["sgd", "adam"],
-    "init_scale":  [0.01, 1.0],
-    "gamma":       [0.9, 0.99],
+    "init_scale":  [0.1, 1.0],
 }

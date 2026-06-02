@@ -84,8 +84,10 @@ class FourRoomsTask(Task):
     output_size       = N_ACTIONS
     n_steps           = None
     success_threshold = 0.8    # set empirically after pre-testing
+    chance_perf       = -5.0  # random policy return (always times out)
+    max_metric        = 1.0   # approximate maximum achievable return
     metric_name       = "mean_return"
-    max_steps         = 2_000_000
+    max_steps         = 200_000
 
     def get_data(self, data_dir="data", seed=42):
         def env_factory():

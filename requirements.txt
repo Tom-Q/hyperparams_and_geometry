@@ -4,3 +4,4 @@ botorch
 gpytorch
 scikit-learn
 numpy
+boto3

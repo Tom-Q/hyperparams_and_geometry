@@ -29,6 +29,7 @@ class MNISTRNNTask(Task):
     output_size       = 10
     n_steps           = N_STEPS
     success_threshold = 0.90
+    chance_perf       = 0.1      # 10-way classification
     metric_name       = "val_acc"
     rdm_time_indices  = [0, 5, 11, 17, 22, 27]   # 6 evenly spaced rows out of 28
 

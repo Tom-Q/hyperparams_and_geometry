@@ -31,6 +31,8 @@ class CartPoleTask(Task):
     output_size       = 2   # Q-values for left/right
     n_steps           = None
     success_threshold = 195.0   # CartPole-v1 standard: avg return ≥ 195 over 100 eps
+    chance_perf       = 0.0   # random policy ~23 steps, using 0 as floor (negligible difference)
+    max_metric        = 500.0 # maximum possible return (CartPole-v1 episode cap)
     metric_name       = "mean_return"
     max_steps         = 500_000
 
