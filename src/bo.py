@@ -7,7 +7,7 @@ Acquisition (GP phase):
 N_eff measures the effective local sample density; once a region saturates the
 acquisition value drops and the optimiser naturally moves elsewhere.
 
-GP target: normalised accuracy y = (raw - chance) / (1 - chance), clamped [0, 1].
+GP target: normalised accuracy y = (raw - chance_perf) / (max_metric - chance_perf), clamped [0, 1].
 
 Input tensor layout (N × (N_CONT + N_CAT)):
   dims 0 .. N_CONT-1 : continuous, log-normalised to [0, 1]
@@ -29,7 +29,7 @@ from botorch.optim import optimize_acqf, optimize_acqf_mixed
 from gpytorch.mlls import ExactMarginalLogLikelihood
 from torch.quasirandom import SobolEngine
 
-N_SOBOL = 100
+N_SOBOL = 200
 
 # Params promoted from categorical to continuous (treated as log-continuous by the GP).
 # They are filtered out of cat_params and added to cont_params automatically.

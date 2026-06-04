@@ -31,8 +31,8 @@ Nine tasks are implemented across three paradigms. All share the same BO infrast
 | Fashion-MNIST 10-way | `fashion_10way` | Supervised MLP | 784-dim | 10 (CE) | 4–1024 | ≥ 0.85 val acc | 100 | 10 classes × 10 exemplars |
 | Spirals (3-arm) | `spirals` | Supervised MLP | 2-dim | 3 (CE) | 16–256 | ≥ 0.85 val acc | 198 | 3 arms × 66 evenly spaced noiseless points |
 | 8-bit Parity | `parity` | Supervised MLP | 8-dim | 1 (BCE) | 16–256 | ≥ 0.95 val acc | 118 | Up to 20 patterns per Hamming weight 0–8 |
-| MNIST row-by-row | `mnist_rnn` | RNN | 28-dim per step, 28 steps | 10 (CE) | 16–256 | ≥ 0.90 val acc | 100 | 10 digits × 10 exemplars (as sequences) |
-| Adding problem | `adding` | RNN | 2-dim per step, 50 steps | 1 (MSE) | 16–256 | MSE < 0.02 | 100 | 100 fixed sequences (seed 200) |
+| MNIST row-by-row | `mnist_rnn` | RNN | 56-dim per step, 14 steps (2 rows/step) | 10 (CE) | 16–256 | ≥ 0.90 val acc | 100 | 10 digits × 10 exemplars (as sequences) |
+| Adding problem | `adding` | RNN | 2-dim per step, 25 steps | 1 (MSE) | 16–256 | MSE < 0.02 | 100 | 100 fixed sequences (seed 200) |
 | CartPole-v1 | `cartpole` | RL (Q-learning) | 4-dim state | 2 Q-values | 16–256 | ≥ 195 mean return | 196 | 14×14 grid over (pole angle, pole angular velocity) |
 | FourRooms | `fourrooms` | RL (Q-learning) | 61-dim RBF | 4 Q-values | 16–256 | ≥ 0.80 mean return | 61 | All non-wall cells, RBF-encoded |
 
@@ -44,11 +44,11 @@ Nine tasks are implemented across three paradigms. All share the same BO infrast
 
 **Parity.** All 256 possible 8-bit patterns are used for both training and validation (the function is deterministic, so the task is memorisation). RDM stimuli are stratified: up to 20 patterns per Hamming weight (number of 1-bits), giving 118 stimuli total. Note that train and val sets are identical; val accuracy therefore tracks train accuracy throughout.
 
-**Adding problem.** Each sequence consists of T=50 steps; each step is a (value, flag) pair where value ∈ [0,1] and exactly 2 flags are 1. The target is the sum of the two flagged values. Success threshold is MSE < 0.02 (a network that always predicts the mean of ~1.0 achieves MSE ≈ 0.17, so this is a meaningful threshold).
+**Adding problem.** Each sequence consists of T=25 steps; each step is a (value, flag) pair where value ∈ [0,1] and exactly 2 flags are 1. The target is the sum of the two flagged values. Success threshold is MSE < 0.02 (a network that always predicts the mean of ~1.0 achieves MSE ≈ 0.17, so this is a meaningful threshold).
 
 **CartPole.** Online Q-learning via Gymnasium's CartPole-v1. The RDM stimulus set is a 14×14 grid over pole angle × pole angular velocity with cart position and velocity fixed at 0.
 
-**FourRooms.** Custom gridworld implementation (no Gymnasium dependency). An 11×11 grid with four interconnected rooms; goal is a fixed cell at (9, 9). State is encoded as a 61-dimensional RBF feature vector (one Gaussian per free cell, σ = 1.5). Reward: +1 on goal, −0.01 per step. The RDM stimulus set is every free cell, RBF-encoded (61 stimuli); metadata stores (row, col) for each.
+**FourRooms.** Custom gridworld implementation (no Gymnasium dependency). An 11×11 grid with four interconnected rooms; goal is a fixed cell at (9, 9). State is encoded as a 61-dimensional RBF feature vector (one Gaussian per free cell, σ = 1.5). Reward: −0.01 per step (no terminal reward); episodes truncate at 100 steps. The RDM stimulus set is every free cell, RBF-encoded (61 stimuli); metadata stores (row, col) for each.
 
 ---
 
@@ -145,6 +145,8 @@ mixed kernel.
 
 **Target:** normalised metric `y = (raw - chance_perf) / (max_metric - chance_perf)`, clamped to [0,1]. `chance_perf` and `max_metric` are task-specific attributes.
 
+This normalization is linear in performance above chance. Notably, this differs from standard hyperparameter optimisation practice, which typically uses error rate (1 − accuracy) or log error rate, making the difference between 90% and 99% accuracy appear 10× larger than between 50% and 59%. Our linear scaling deliberately avoids over-weighting high-accuracy configs: a network at 90% and one at 99% look nearly equivalent to the GP (0.80 vs 0.98 normalised for a chance-50% task), keeping acquisition pressure focused on finding *working* configurations rather than maximising accuracy. This is appropriate given the goal of broad coverage rather than optimisation.
+
 **MLL fitting:** `ExactMarginalLogLikelihood` via `fit_gpytorch_mll` (L-BFGS-B).
 
 ### 4.4 N_eff
@@ -209,7 +211,7 @@ input → H → H//2 → H//4 → ... → output
 
 where H is `hidden_size` and each successive layer halves the width. The number of hidden layers equals `depth` (1 or 2). No dropout.
 
-**Special case:** If `hidden_size < 8`, `depth` is capped at 2, because `H // 4` would be less than 2 units (degenerate). The effective depth after this cap is stored as `effective_depth` in the saved metadata.
+A warning is printed if `hidden_size < 8` with `depth > 2`, since `H // 4` would be less than 2 units, but no automatic cap is applied — the requested depth is used as-is.
 
 Activation functions are applied to all hidden layers; no activation on the output layer.
 
@@ -286,19 +288,25 @@ initial weights; `init_scale = 1.0` uses the standard initialisation directly.
 
 ### 6.5 Early stopping
 
-- **Minimum epochs:** 15. Early stopping is not considered before this.
-- **Patience:** 10 epochs without improvement in validation *loss* (threshold 1×10⁻⁴). Note: early stopping watches `val_loss`, not `val_acc`.
-- **Best model:** tracked separately by `val_acc` (or the task's `metric_name`). The best checkpoint is saved to `model_best.pt`.
+- **Minimum epochs:** 10. Early stopping is not considered before this.
+- **Patience:** 5 epochs without improvement in validation *loss* (relative threshold 1×10⁻⁴ — `val_loss` must decrease by at least 0.01% to reset patience). Note: early stopping watches `val_loss`, not `val_acc`.
+- **Best model** (supervised and RNN only): tracked separately by `val_acc` (or the task's `metric_name`). The best checkpoint is saved to `model_best.pt`.
 
 ### 6.6 Activation checkpoints
 
-Hidden-layer activations are saved on the fixed RDM stimulus set at **log₄-spaced training steps**: steps 1, 4, 16, 64, 256, 1024, 4096, … up to and including the final training step. This gives approximately equal coverage per order of magnitude of training progress.
+Activations on the fixed RDM stimulus set are saved under three orthogonal indexing schemes, capturing different aspects of representational dynamics:
 
-Additionally, activations are always saved at the **final step** (current weights at end of training) and by **reloading `model_best.pt`** and saving those as `best.npz`.
+**Step checkpoints** (`step_XXXXXXX.npz`): log₄-spaced gradient update counts — steps 1, 4, 16, 64, 256, 1024, 4096, … up to and including the final step. Indexes training by optimizer updates regardless of batch size.
+
+**Epoch checkpoints** (`epoch_X.npz`): fixed epoch milestones 0.25, 1, 4, 16, 64. Indexes training by data exposure, enabling batch-size-normalised comparisons across networks. Files named `epoch_0p25.npz`, `epoch_1.npz`, `epoch_4.npz`, `epoch_16.npz`, `epoch_64.npz`. Supervised and RNN only (no epoch concept in RL).
+
+**Performance checkpoints** (`perf_X.npz`): saved when `best_model_metric` (or `best_rolling` for RL) first crosses each of 10 normalised performance thresholds: 0.025, 0.05, 0.1, 0.2, 0.4, 0.6, 0.8, 0.85, 0.9, 0.95. Normalised performance is `(raw - chance_perf) / (max_metric - chance_perf)`. Thresholds are dense at the takeoff end (0.025–0.2) and tapering end (0.8–0.95), sparse in the middle. Files named `perf_0p025.npz`, `perf_0p1.npz`, etc. Only fires for thresholds the network actually reaches — failed networks produce fewer files.
+
+Additionally, activations are always saved at the **final step** (current weights at end of training). For supervised and RNN tasks, `model_best.pt` is also reloaded and saved as `best.npz`. RL tasks save only `final.npz` (no `model_best.pt` — the final step corresponds to peak performance for networks that hit the success threshold, which exit training immediately upon solving).
 
 **MLP:** post-activation outputs of each hidden layer are saved as `layer_0`, `layer_1`, ... Each array has shape `(N_stimuli, hidden_size_of_that_layer)`.
 
-**RNN:** hidden states at a task-specific subset of time steps (to limit storage). Arrays are keyed `t_0`, `t_5`, etc. For MNIST-RNN: steps [0, 5, 11, 17, 22, 27]. For Adding: steps [0, 4, 9, 19, 34, 49].
+**RNN:** hidden states at a task-specific subset of time steps (to limit storage). Arrays are keyed `t_0`, `t_2`, etc. For MNIST-RNN (14 steps): time indices [0, 2, 5, 8, 11, 13]. For Adding (25 steps): time indices [0, 2, 4, 9, 17, 24].
 
 ---
 
@@ -308,11 +316,13 @@ For each trained network, the following files are written under `output/experime
 
 | File | Contents |
 |---|---|
-| `metadata.json` | Task name, full config (including `effective_depth`), best epoch/step, best metric, final epoch/step, final metric |
+| `metadata.json` | Task name, full config, best epoch/step, best metric, final epoch/step, final metric |
 | `history.json` | Per-epoch: epoch number, global step, train loss, val loss, val acc |
-| `model_best.pt` | PyTorch state dict at the epoch of peak val acc |
-| `step_XXXXXXX.npz` | Activations on RDM stimuli at global step XXXXXXX (one file per checkpoint) |
-| `best.npz` | Activations from `model_best.pt` weights |
+| `model_best.pt` | PyTorch state dict at the epoch of peak val acc (supervised and RNN only) |
+| `step_XXXXXXX.npz` | Activations at log₄-spaced gradient step XXXXXXX |
+| `epoch_X.npz` | Activations at epoch milestone X ∈ {0.25, 1, 4, 16, 64} (supervised and RNN only) |
+| `perf_X.npz` | Activations when normalised performance first crossed threshold X |
+| `best.npz` | Activations from `model_best.pt` weights (supervised and RNN only) |
 | `final.npz` | Activations from end-of-training weights |
 
 At the task level, `output/experiments/<task>/bo_state.json` stores the full observation history:
@@ -344,4 +354,4 @@ the raw validation metric passed to the GP. `val_accs` are per-repetition values
 - **Sobol initialisation** uses `seed = len(observations)` at the time of the call. Given a fixed run order and no interruptions, this is fully deterministic. After interruption and resume, the seed correctly reflects completed observations, preserving the sequence.
 - **Training data** is generated/loaded with `seed=42` for train splits and `seed=43` for val splits (where applicable). MNIST and Fashion-MNIST are downloaded from standard sources; the train/val split uses `sklearn.model_selection.train_test_split` with `random_state=seed` and stratification by label.
 - **No global random seed is set** during training. Results across runs of the same config will vary (this is intentional — the BO runs 2 repetitions per config by default to separate stochastic from hyperparameter-driven variance).
-- `effective_depth` (the actual number of hidden layers used, after the small-network cap) is recorded in `metadata.json` alongside the requested `depth`.
+- `depth` (the requested number of hidden layers) is recorded in `metadata.json` as part of `config`.

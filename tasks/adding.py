@@ -1,4 +1,4 @@
-"""Task 10: Adding problem (T=50, 2-dim per step, scalar output, MSE)."""
+"""Task 10: Adding problem (T=25, 2-dim per step, scalar output, MSE)."""
 import numpy as np
 import torch
 import torch.nn as nn

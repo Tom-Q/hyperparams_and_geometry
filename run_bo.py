@@ -6,7 +6,7 @@ Sobol phase: round-robin over categorical combos, quasi-random continuous dims.
 
 Usage:
     python run_bo.py --task spirals [--n-iter 300] [--output-dir output/experiments]
-                     [--beta 4.0] [--h 0.2] [--lam 0.1] [--max-epochs 100]
+                     [--beta 4.0] [--h 0.2] [--max-epochs 100]
 
 Every 4 primary iterations a repeat of the most recent primary is inserted
 (P P P P R pattern), giving a ~20% repeat rate for aleatoric noise estimation.
@@ -51,12 +51,6 @@ def parse_args():
                    help="N_eff RBF bandwidth in normalised [0,1] space")
     p.add_argument("--max-epochs",       type=int,   default=None,
                    help="Override task's max_epochs/max_steps")
-    p.add_argument("--epsilon-start",    type=float, default=None,
-                   help="RL: starting epsilon (default: train_rl.EPSILON)")
-    p.add_argument("--epsilon-end",      type=float, default=0.0,
-                   help="RL: final epsilon after decay (default: 0.0)")
-    p.add_argument("--epsilon-decay-steps", type=int, default=None,
-                   help="RL: steps over which epsilon decays linearly to epsilon-end")
     p.add_argument("--log-interval",    type=int,   default=None,
                    help="RL: steps between log lines (default: train_rl.LOG_INTERVAL)")
     p.add_argument("--rolling-n",       type=int,   default=None,
@@ -68,7 +62,6 @@ def parse_args():
 
 def run_config(task, config, run_id_base, output_dir, rdm_inputs,
                ds_train=None, ds_val=None, env_factory=None, max_epochs_override=None,
-               epsilon_start=None, epsilon_end=0.0, epsilon_decay_steps=None,
                log_interval=None, rolling_n=None,
                save_activations=True):
     run_dir = Path(output_dir) / f"{run_id_base}_r0"
@@ -84,9 +77,7 @@ def run_config(task, config, run_id_base, output_dir, rdm_inputs,
             env_factory          = env_factory,
             max_steps_override   = max_epochs_override,
             verbose              = True,
-            epsilon_start        = epsilon_start if epsilon_start is not None else EPSILON,
-            epsilon_end          = epsilon_end,
-            epsilon_decay_steps  = epsilon_decay_steps,
+            epsilon_start        = EPSILON,
             log_interval         = log_interval if log_interval is not None else LOG_INTERVAL,
             rolling_n            = rolling_n if rolling_n is not None else ROLLING_N,
             save_activations     = save_activations,
@@ -236,14 +227,11 @@ def main():
             rdm_inputs          = rdm_inputs,
             ds_train            = ds_train,
             ds_val              = ds_val,
-            env_factory          = env_factory,
-            max_epochs_override  = args.max_epochs,
-            epsilon_start        = args.epsilon_start,
-            epsilon_end          = args.epsilon_end,
-            epsilon_decay_steps  = args.epsilon_decay_steps,
-            log_interval         = args.log_interval,
-            rolling_n            = args.rolling_n,
-            save_activations     = not args.no_save_activations,
+            env_factory         = env_factory,
+            max_epochs_override = args.max_epochs,
+            log_interval        = args.log_interval,
+            rolling_n           = args.rolling_n,
+            save_activations    = not args.no_save_activations,
         )
 
         elapsed_net = time.time() - t_network

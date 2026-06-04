@@ -8,7 +8,7 @@ import torch
 from .dataset import make_loader
 from .model_rnn import RNNModel
 from .rdm import save_activations_rnn
-from .utils import MIN_EPOCHS, MAX_EPOCHS, EARLY_STOP_PATIENCE, EARLY_STOP_THRESHOLD, log4_checkpoints, make_optimizer, l1_penalty
+from .utils import MIN_EPOCHS, MAX_EPOCHS, EARLY_STOP_PATIENCE, EARLY_STOP_THRESHOLD, log4_checkpoints, epoch_checkpoints, format_epoch_label, perf_checkpoint_thresholds, make_optimizer, l1_penalty
 
 
 def _evaluate(model, loader, criterion, device, multiclass=False):
@@ -68,9 +68,12 @@ def train_network(task, config, run_dir, rdm_inputs, ds_train=None, ds_val=None,
     rdm_tensor   = torch.tensor(rdm_inputs, dtype=torch.float32)
     time_indices = task.rdm_time_indices
 
-    steps_per_epoch  = math.ceil(len(ds_train) / batch_size)
-    total_steps      = max_epochs * steps_per_epoch
-    checkpoint_steps = set(log4_checkpoints(total_steps))
+    steps_per_epoch   = math.ceil(len(ds_train) / batch_size)
+    total_steps       = max_epochs * steps_per_epoch
+    checkpoint_steps  = set(log4_checkpoints(total_steps))
+    epoch_ckpt_steps  = epoch_checkpoints(steps_per_epoch, max_epochs)
+    perf_ckpts        = perf_checkpoint_thresholds(task.chance_perf, task.max_metric)
+    perf_crossed      = set()
 
     history = []
 
@@ -107,6 +110,11 @@ def train_network(task, config, run_dir, rdm_inputs, ds_train=None, ds_val=None,
                 save_activations_rnn(model, rdm_tensor,
                                      run_dir / f"step_{global_step:07d}",
                                      device, time_indices=time_indices)
+            if save_activations and global_step in epoch_ckpt_steps:
+                label = format_epoch_label(epoch_ckpt_steps[global_step])
+                save_activations_rnn(model, rdm_tensor,
+                                     run_dir / f"epoch_{label}",
+                                     device, time_indices=time_indices)
 
         epoch_loss /= len(ds_train)
         val_loss, val_acc = _evaluate(model, val_loader, criterion, device, multiclass)
@@ -135,6 +143,13 @@ def train_network(task, config, run_dir, rdm_inputs, ds_train=None, ds_val=None,
             best_epoch        = epoch + 1
             best_step         = global_step
             torch.save(model.state_dict(), run_dir / "model_best.pt")
+            if save_activations:
+                perf_val = -best_model_metric if use_mse else best_model_metric
+                for raw_t, label in perf_ckpts:
+                    if label not in perf_crossed and perf_val >= raw_t:
+                        save_activations_rnn(model, rdm_tensor, run_dir / f"perf_{label}",
+                                             device, time_indices=time_indices)
+                        perf_crossed.add(label)
 
         # Early stopping (by val_loss): track from epoch 1, stop only after MIN_EPOCHS
         if val_loss < best_val_loss * (1 - EARLY_STOP_THRESHOLD):

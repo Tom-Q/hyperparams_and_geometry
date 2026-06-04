@@ -10,7 +10,7 @@ import torch.nn as nn
 
 from .model_mlp import MLP
 from .rdm import save_activations_mlp, stimuli_to_tensor
-from .utils import log4_checkpoints, make_optimizer, l1_penalty
+from .utils import log4_checkpoints, perf_checkpoint_thresholds, make_optimizer, l1_penalty
 
 EPSILON       = 0.1   # default ε (used when no decay schedule given)
 ROLLING_N     = 30    # episodes in rolling average for performance tracking
@@ -46,6 +46,9 @@ def train_network(task, config, run_dir, rdm_inputs, env_factory,
     gamma            = 0.99
     stimuli_t        = stimuli_to_tensor(rdm_inputs)
     checkpoint_steps = set(log4_checkpoints(max_steps))
+
+    perf_ckpts   = perf_checkpoint_thresholds(task.chance_perf, task.max_metric)
+    perf_crossed = set()
 
     history       = []
     episode_rets  = deque(maxlen=rolling_n)
@@ -105,6 +108,12 @@ def train_network(task, config, run_dir, rdm_inputs, env_factory,
                 rolling_mean = float(np.mean(episode_rets))
                 if rolling_mean > best_rolling:
                     best_rolling = rolling_mean
+                    if save_activations:
+                        for raw_t, label in perf_ckpts:
+                            if label not in perf_crossed and best_rolling >= raw_t:
+                                save_activations_mlp(model, stimuli_t,
+                                                     run_dir / f"perf_{label}", device)
+                                perf_crossed.add(label)
                 if rolling_mean >= task.success_threshold:
                     if verbose:
                         elapsed = round(time.time() - t0)

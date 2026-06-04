@@ -1,7 +1,7 @@
 import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
-from torchvision import datasets, transforms
+from torchvision import datasets
 from sklearn.model_selection import train_test_split
 
 
@@ -28,13 +28,8 @@ def _make_labels(digits, task_bit):
 
 
 def load_mnist_splits(data_dir="data", seed=42):
-    transform = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Lambda(lambda x: x.view(-1).float() / 255.0),
-    ])
-
-    mnist_train = datasets.MNIST(data_dir, train=True, download=True, transform=transform)
-    mnist_test = datasets.MNIST(data_dir, train=False, download=True, transform=transform)
+    mnist_train = datasets.MNIST(data_dir, train=True,  download=True)
+    mnist_test  = datasets.MNIST(data_dir, train=False, download=True)
 
     train_images = mnist_train.data.float().view(-1, 784) / 255.0
     train_digits = mnist_train.targets

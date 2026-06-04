@@ -1,4 +1,4 @@
-"""Task 5: 12-bit parity (binary classification)."""
+"""Task 5: 8-bit parity (binary classification)."""
 import numpy as np
 import torch
 import torch.nn as nn
@@ -8,11 +8,11 @@ from .base import Task
 from ._shared import SUPERVISED_HYPERPARAMS
 
 N_BITS     = 8
-PER_LEVEL  = 20   # levels 0,8 → 1; levels 1,7 → 8; levels 2-6 → 20; total = 138
+PER_LEVEL  = 20   # levels 0,8 → 1; levels 1,7 → 8; levels 2-6 → 20; total = 118
 
 
 def _all_parity_patterns():
-    """All 2^12 = 4096 patterns with parity label."""
+    """All 2^8 = 256 patterns with parity label."""
     n = 2 ** N_BITS
     patterns = ((np.arange(n)[:, None] >> np.arange(N_BITS)) & 1).astype(np.float32)
     labels   = (patterns.sum(axis=1) % 2).astype(np.float32)
