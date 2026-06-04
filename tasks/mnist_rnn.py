@@ -1,4 +1,4 @@
-"""Task 9: MNIST row-by-row (7 steps × 112-dim = 4 rows per step)."""
+"""Task 9: MNIST row-by-row (14 steps × 56-dim = 2 rows per step)."""
 import numpy as np
 import torch.nn as nn
 from torch.utils.data import TensorDataset
@@ -8,8 +8,8 @@ from sklearn.model_selection import train_test_split
 from .base import Task
 from ._shared import RNN_HYPERPARAMS
 
-N_STEPS    = 28   # one row per step
-INPUT_SIZE = 28   # one pixel per column
+N_STEPS    = 14   # two rows per step
+INPUT_SIZE = 56   # two rows × 28 pixels
 
 
 def _mnist_to_sequences(data_dir):
@@ -31,7 +31,7 @@ class MNISTRNNTask(Task):
     success_threshold = 0.90
     chance_perf       = 0.1      # 10-way classification
     metric_name       = "val_acc"
-    rdm_time_indices  = [0, 5, 11, 17, 22, 27]   # 6 evenly spaced rows out of 28
+    rdm_time_indices  = [0, 2, 5, 8, 11, 13]   # 6 evenly spaced steps out of 14
 
     def get_data(self, data_dir="data", seed=42):
         train_x, train_y, _, _ = _mnist_to_sequences(data_dir)
@@ -54,7 +54,7 @@ class MNISTRNNTask(Task):
             for i in chosen:
                 inputs_list.append(test_x[i].numpy())
                 digit_list.append(d)
-        inputs   = np.stack(inputs_list).astype(np.float32)   # (100, 7, 112)
+        inputs   = np.stack(inputs_list).astype(np.float32)   # (100, 14, 56)
         metadata = {"digits": np.array(digit_list, dtype=np.int32)}
         return inputs, metadata
 

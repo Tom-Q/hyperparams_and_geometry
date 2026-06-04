@@ -7,13 +7,13 @@ from torch.utils.data import TensorDataset
 from .base import Task
 from ._shared import RNN_HYPERPARAMS
 
-T           = 50
+T           = 25
 N_TRAIN     = 10_000
 N_VAL       = 1_000
 N_STIMULI   = 100
 STIM_SEED   = 200   # fixed seed distinct from get_data seeds
-# Save hidden state at these time steps only (to limit storage for T=50)
-RDM_TIME_INDICES = [0, 4, 9, 19, 34, 49]   # 0-indexed: steps 1, 5, 10, 20, 35, 50
+# Save hidden state at these time steps only (to limit storage)
+RDM_TIME_INDICES = [0, 2, 4, 9, 17, 24]   # 0-indexed: 6 evenly spaced steps out of 25
 
 
 def _generate_adding(n, seed):
