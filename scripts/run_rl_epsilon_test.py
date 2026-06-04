@@ -1,6 +1,6 @@
 """
-RL epsilon-decay test: fourrooms then cartpole.
-Schedule: ε = 0.5 → 0 linearly over 100,000 steps.
+RL test: fourrooms then cartpole.
+Fixed ε = 0.1 throughout training.
 50 Sobol + 100 GP primaries = 187 total iterations per task.
 Performance tracked as rolling mean of last 30 training episodes.
 
@@ -20,9 +20,6 @@ COMMON = [
     "--output-dir",          "output/experiments_rl_epsilon_test",
     "--beta",                "4.0",
     "--h",                   "0.15",
-    "--epsilon-start",       "0.5",
-    "--epsilon-end",         "0.0",
-    "--epsilon-decay-steps", "100000",
     "--no-save-activations",
 ]
 

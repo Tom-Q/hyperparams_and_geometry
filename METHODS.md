@@ -253,10 +253,11 @@ Online Q-learning (no replay buffer — the non-iid nature of the training signa
 intentional). Each network trains for up to **100,000 environment steps**. Training
 stops early if the success threshold is reached.
 
-**Epsilon-greedy exploration:** ε decays linearly from 0.5 to 0 over 100,000 steps.
-Policy is evaluated every 5,000 steps (mean return over 20 episodes).
+**Epsilon-greedy exploration:** fixed ε = 0.1 throughout training. Fixed epsilon ensures
+all networks are trained and measured under identical exploration pressure, making
+representations comparable across networks.
 
-**Metric stored:** mean episode return at the best evaluation point.
+**Metric stored:** best rolling mean return over the last 30 training episodes.
 For the GP, returns are normalised: `y = (raw - chance_perf) / (max_metric - chance_perf)`.
 
 **Adding task metric:** `train_rnn` returns *negative* MSE (so higher = better, consistent
