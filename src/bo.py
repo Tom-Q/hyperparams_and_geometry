@@ -22,6 +22,7 @@ from pathlib import Path
 import numpy as np
 import torch
 from botorch.acquisition import AnalyticAcquisitionFunction
+from tasks._shared import LEARNING_RATE, L1_REG, L2_REG
 from botorch.fit import fit_gpytorch_mll
 from botorch.models.gp_regression_mixed import MixedSingleTaskGP
 from botorch.optim import optimize_acqf, optimize_acqf_mixed
@@ -48,12 +49,10 @@ def _cont_params_for_task(task):
     Includes learning_rate, l1_reg, l2_reg, plus any CONT_FROM_CAT params
     present in the task's categorical_space (hidden_size, batch_size).
     """
-    l1_hi = getattr(task, "l1_range_hi", 1e-1)
-    l2_hi = getattr(task, "l2_range_hi", 1e-2)
     params = [
-        ("learning_rate", 1e-5, 1e-1),
-        ("l1_reg",        1e-6, l1_hi),
-        ("l2_reg",        1e-6, l2_hi),
+        ("learning_rate", *LEARNING_RATE),
+        ("l1_reg",        *L1_REG),
+        ("l2_reg",        *L2_REG),
     ]
     cat_space = task.categorical_space()
     if "hidden_size" in cat_space:

@@ -1,7 +1,7 @@
 """Task 8: FourRooms gridworld with RBF state encoding + online Q-learning."""
 import numpy as np
 from .base import Task
-from ._shared import RL_CATS
+from ._shared import RL_HYPERPARAMS
 
 # FourRooms: 11×11 grid with internal walls creating 4 rooms.
 GRID = np.array([
@@ -104,4 +104,4 @@ class FourRoomsTask(Task):
         return inputs, metadata
 
     def categorical_space(self):
-        return RL_CATS
+        return RL_HYPERPARAMS

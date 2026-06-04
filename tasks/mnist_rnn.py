@@ -6,7 +6,7 @@ from torchvision import datasets
 from sklearn.model_selection import train_test_split
 
 from .base import Task
-from ._shared import RNN_CATS
+from ._shared import RNN_HYPERPARAMS
 
 N_STEPS    = 28   # one row per step
 INPUT_SIZE = 28   # one pixel per column
@@ -59,7 +59,7 @@ class MNISTRNNTask(Task):
         return inputs, metadata
 
     def categorical_space(self):
-        return RNN_CATS
+        return RNN_HYPERPARAMS
 
     def make_loss(self):
         return nn.CrossEntropyLoss()

@@ -6,7 +6,7 @@ from torchvision import datasets
 from sklearn.model_selection import train_test_split
 
 from .base import Task
-from ._shared import SUPERVISED_CATS
+from ._shared import SUPERVISED_HYPERPARAMS
 
 
 def _load_mnist_flat(data_dir):
@@ -55,7 +55,7 @@ class MNIST10WayTask(Task):
         return inputs, metadata
 
     def categorical_space(self):
-        return SUPERVISED_CATS
+        return SUPERVISED_HYPERPARAMS
 
     def make_loss(self):
         return nn.CrossEntropyLoss()

@@ -5,7 +5,7 @@ import torch.nn as nn
 from torch.utils.data import TensorDataset
 
 from .base import Task
-from ._shared import RNN_CATS
+from ._shared import RNN_HYPERPARAMS
 
 T           = 50
 N_TRAIN     = 10_000
@@ -58,7 +58,7 @@ class AddingTask(Task):
         return x, {"targets": y}   # shape: (100, 50, 2)
 
     def categorical_space(self):
-        return RNN_CATS
+        return RNN_HYPERPARAMS
 
     def make_loss(self):
         return nn.MSELoss()

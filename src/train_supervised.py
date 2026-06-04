@@ -149,12 +149,10 @@ def train_network(task, config, run_dir, rdm_inputs, ds_train=None, ds_val=None,
         test_metric = round(float(test_acc), 6)
 
     # Persist metadata and history
-    saved_config = dict(config)
-    saved_config["effective_depth"] = model.effective_depth
     metadata = {
         "task":         task.name,
         "paradigm":     task.paradigm,
-        "config":       saved_config,
+        "config":       dict(config),
         "best_epoch":   best_epoch,
         "best_step":    best_step,
         "best_metric":  round(float(best_model_metric), 6),

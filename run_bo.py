@@ -98,7 +98,7 @@ def run_config(task, config, run_id_base, output_dir, rdm_inputs,
             verbose             = True,
             save_activations    = save_activations,
         )
-    else:
+    elif task.paradigm == "supervised":
         metric = train_supervised(
             task                = task,
             config              = config,
@@ -110,6 +110,8 @@ def run_config(task, config, run_id_base, output_dir, rdm_inputs,
             verbose             = True,
             save_activations    = save_activations,
         )
+    else:
+        raise ValueError(f"Unknown task paradigm: {task.paradigm!r}. Expected 'supervised', 'rnn', or 'rl'.")
 
     flag = "OK" if metric >= task.success_threshold else "FAILED"
     print(f"        performance={metric:.4f}  [{flag}]")

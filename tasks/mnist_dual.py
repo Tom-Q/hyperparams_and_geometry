@@ -3,7 +3,7 @@ import numpy as np
 import torch.nn as nn
 
 from .base import Task
-from ._shared import SUPERVISED_CATS
+from ._shared import SUPERVISED_HYPERPARAMS
 
 
 class MNISTDualTask(Task):
@@ -55,7 +55,7 @@ class MNISTDualTask(Task):
         return inputs, metadata
 
     def categorical_space(self):
-        return SUPERVISED_CATS
+        return SUPERVISED_HYPERPARAMS
 
     def make_loss(self):
         return nn.BCEWithLogitsLoss()

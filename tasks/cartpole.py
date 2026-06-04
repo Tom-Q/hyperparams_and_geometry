@@ -1,7 +1,7 @@
 """Task 7: CartPole-v1 via online Q-learning."""
 import numpy as np
 from .base import Task
-from ._shared import RL_CATS
+from ._shared import RL_HYPERPARAMS
 
 # Grid over (pole_angle, pole_angular_velocity); other dims held at 0.
 N_SIDE           = 14   # 14×14 = 196 stimuli
@@ -46,4 +46,4 @@ class CartPoleTask(Task):
         return _make_cartpole_stimuli()
 
     def categorical_space(self):
-        return RL_CATS
+        return RL_HYPERPARAMS

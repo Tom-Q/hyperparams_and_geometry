@@ -5,7 +5,7 @@ import torch.nn as nn
 from torch.utils.data import TensorDataset
 
 from .base import Task
-from ._shared import SUPERVISED_CATS
+from ._shared import SUPERVISED_HYPERPARAMS
 
 N_TRAIN        = 3000   # 1000 per arm
 N_VAL          = 600
@@ -71,7 +71,7 @@ class SpiralsTask(Task):
         return inputs, {"classes": classes}
 
     def categorical_space(self):
-        return SUPERVISED_CATS
+        return SUPERVISED_HYPERPARAMS
 
     def make_loss(self):
         return nn.CrossEntropyLoss()

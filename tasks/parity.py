@@ -5,7 +5,7 @@ import torch.nn as nn
 from torch.utils.data import TensorDataset
 
 from .base import Task
-from ._shared import SUPERVISED_CATS
+from ._shared import SUPERVISED_HYPERPARAMS
 
 N_BITS     = 8
 PER_LEVEL  = 20   # levels 0,8 → 1; levels 1,7 → 8; levels 2-6 → 20; total = 138
@@ -60,7 +60,7 @@ class ParityTask(Task):
         return _parity_rdm_stimuli(seed=seed)
 
     def categorical_space(self):
-        return SUPERVISED_CATS
+        return SUPERVISED_HYPERPARAMS
 
     def make_loss(self):
         return nn.BCEWithLogitsLoss()
