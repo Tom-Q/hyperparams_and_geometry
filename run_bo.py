@@ -56,8 +56,10 @@ def parse_args():
                    help="RL: final epsilon after decay (default: 0.0)")
     p.add_argument("--epsilon-decay-steps", type=int, default=None,
                    help="RL: steps over which epsilon decays linearly to epsilon-end")
-    p.add_argument("--eval-interval",   type=int,   default=None,
-                   help="RL: steps between evaluations (default: train_rl.EVAL_INTERVAL)")
+    p.add_argument("--log-interval",    type=int,   default=None,
+                   help="RL: steps between log lines (default: train_rl.LOG_INTERVAL)")
+    p.add_argument("--rolling-n",       type=int,   default=None,
+                   help="RL: episodes in rolling average (default: train_rl.ROLLING_N)")
     p.add_argument("--no-save-activations", action="store_true",
                    help="Skip saving activations and model checkpoints (for test runs)")
     return p.parse_args()
@@ -65,13 +67,14 @@ def parse_args():
 
 def run_config(task, config, run_id_base, output_dir, rdm_inputs,
                ds_train=None, ds_val=None, env_factory=None, max_epochs_override=None,
-               epsilon_start=None, epsilon_end=0.0, epsilon_decay_steps=None, eval_interval=None,
+               epsilon_start=None, epsilon_end=0.0, epsilon_decay_steps=None,
+               log_interval=None, rolling_n=None,
                save_activations=True):
     run_dir = Path(output_dir) / f"{run_id_base}_r0"
     print(f"    ->  {run_dir.name}")
 
     if task.paradigm == "rl":
-        from src.train_rl import EPSILON, EVAL_INTERVAL
+        from src.train_rl import EPSILON, LOG_INTERVAL, ROLLING_N
         metric = train_rl(
             task                 = task,
             config               = config,
@@ -83,7 +86,8 @@ def run_config(task, config, run_id_base, output_dir, rdm_inputs,
             epsilon_start        = epsilon_start if epsilon_start is not None else EPSILON,
             epsilon_end          = epsilon_end,
             epsilon_decay_steps  = epsilon_decay_steps,
-            eval_interval        = eval_interval if eval_interval is not None else EVAL_INTERVAL,
+            log_interval         = log_interval if log_interval is not None else LOG_INTERVAL,
+            rolling_n            = rolling_n if rolling_n is not None else ROLLING_N,
             save_activations     = save_activations,
         )
     elif task.paradigm == "rnn":
@@ -237,7 +241,8 @@ def main():
             epsilon_start        = args.epsilon_start,
             epsilon_end          = args.epsilon_end,
             epsilon_decay_steps  = args.epsilon_decay_steps,
-            eval_interval        = args.eval_interval,
+            log_interval         = args.log_interval,
+            rolling_n            = args.rolling_n,
             save_activations     = not args.no_save_activations,
         )
 

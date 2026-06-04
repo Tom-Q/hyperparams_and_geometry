@@ -37,7 +37,7 @@ def _rbf_encode(pos):
 class FourRoomsEnv:
     """Minimal FourRooms implementation (no Gymnasium dependency)."""
 
-    def __init__(self, max_steps=500):
+    def __init__(self, max_steps=100):
         self.max_steps   = max_steps
         self._step_count = 0
         self._pos        = None
@@ -69,7 +69,7 @@ class FourRoomsEnv:
         if GRID[nr, nc] == 0:
             self._pos = (nr, nc)
         reached_goal = self._pos == GOAL_POS
-        reward       = 1.0 if reached_goal else -0.01
+        reward       = -0.01
         done         = reached_goal or self._step_count >= self.max_steps
         return _rbf_encode(self._pos), reward, done, False, {}
 
@@ -83,9 +83,9 @@ class FourRoomsTask(Task):
     input_size        = N_RBF
     output_size       = N_ACTIONS
     n_steps           = None
-    success_threshold = 0.8    # set empirically after pre-testing
-    chance_perf       = -5.0  # random policy return (always times out)
-    max_metric        = 1.0   # approximate maximum achievable return
+    success_threshold = -0.2   # mean episode ≤ 20 steps: -0.01 * 20 = -0.2
+    chance_perf       = -1.0  # random policy always times out: -0.01 * 100 = -1.0
+    max_metric        = 0.0   # theoretical ceiling (0-step episode, impossible)
     metric_name       = "mean_return"
     max_steps         = 100_000
 
