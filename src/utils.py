@@ -1,9 +1,10 @@
 """Shared training utilities used by all training loops."""
 import torch
 
-MIN_EPOCHS          = 15
-MAX_EPOCHS          = 100
-EARLY_STOP_PATIENCE = 10
+MIN_EPOCHS              = 10
+MAX_EPOCHS              = 100
+EARLY_STOP_PATIENCE     = 5
+EARLY_STOP_THRESHOLD    = 0.0001  # relative: val_loss must improve by ≥0.01% to reset patience
 
 
 def log4_checkpoints(total_steps):

@@ -1,5 +1,6 @@
 import json
 import math
+import time
 from pathlib import Path
 
 import torch
@@ -7,7 +8,7 @@ import torch
 from .dataset import make_loader
 from .model_rnn import RNNModel
 from .rdm import save_activations_rnn
-from .utils import MIN_EPOCHS, MAX_EPOCHS, EARLY_STOP_PATIENCE, log4_checkpoints, make_optimizer, l1_penalty
+from .utils import MIN_EPOCHS, MAX_EPOCHS, EARLY_STOP_PATIENCE, EARLY_STOP_THRESHOLD, log4_checkpoints, make_optimizer, l1_penalty
 
 
 def _evaluate(model, loader, criterion, device, multiclass=False):
@@ -82,10 +83,12 @@ def train_network(task, config, run_dir, rdm_inputs, ds_train=None, ds_val=None,
     best_step         = 0
     final_epoch       = 0
     final_metric      = 0.0
+    t0                = time.time()
 
     for epoch in range(max_epochs):
         model.train()
         epoch_loss = 0.0
+        t_epoch = time.time()
 
         for x, y in train_loader:
             global_step += 1
@@ -109,8 +112,11 @@ def train_network(task, config, run_dir, rdm_inputs, ds_train=None, ds_val=None,
         val_loss, val_acc = _evaluate(model, val_loader, criterion, device, multiclass)
 
         if verbose:
-            metric_str = f"val_mse={val_loss:.4f}" if use_mse else f"val_acc={val_acc:.4f}  val_loss={val_loss:.4f}"
-            print(f"  epoch {epoch+1:3d}  {metric_str}", flush=True)
+            elapsed     = time.time() - t0
+            epoch_time  = time.time() - t_epoch
+            metric_str  = f"val_mse={val_loss:.4f}" if use_mse else f"val_acc={val_acc:.4f}"
+            print(f"  epoch {epoch+1:3d}  {metric_str}  [{epoch_time:.1f}s/epoch  {elapsed:.0f}s total]",
+                  flush=True)
 
         record = {
             "epoch":      epoch + 1,
@@ -130,17 +136,14 @@ def train_network(task, config, run_dir, rdm_inputs, ds_train=None, ds_val=None,
             best_step         = global_step
             torch.save(model.state_dict(), run_dir / "model_best.pt")
 
-        # Early stopping (by val_loss)
-        if epoch >= MIN_EPOCHS - 1:
-            if val_loss < best_val_loss - 1e-4:
-                best_val_loss = val_loss
-                no_improve    = 0
-            else:
-                no_improve += 1
-                if no_improve >= EARLY_STOP_PATIENCE:
-                    break
-        elif val_loss < best_val_loss:
+        # Early stopping (by val_loss): track from epoch 1, stop only after MIN_EPOCHS
+        if val_loss < best_val_loss * (1 - EARLY_STOP_THRESHOLD):
             best_val_loss = val_loss
+            no_improve    = 0
+        else:
+            no_improve += 1
+        if epoch + 1 >= MIN_EPOCHS and no_improve >= EARLY_STOP_PATIENCE:
+            break
 
     final_epoch  = epoch + 1
     final_metric = val_loss if use_mse else val_acc

@@ -7,7 +7,7 @@ import torch
 from .dataset import make_loader
 from .model_mlp import MLP
 from .rdm import save_activations_mlp, stimuli_to_tensor
-from .utils import MIN_EPOCHS, MAX_EPOCHS, EARLY_STOP_PATIENCE, log4_checkpoints, make_optimizer, l1_penalty
+from .utils import MIN_EPOCHS, MAX_EPOCHS, EARLY_STOP_PATIENCE, EARLY_STOP_THRESHOLD, log4_checkpoints, make_optimizer, l1_penalty
 
 
 def _evaluate(model, loader, criterion, device, multiclass=False):
@@ -121,17 +121,14 @@ def train_network(task, config, run_dir, rdm_inputs, ds_train=None, ds_val=None,
             best_step         = global_step
             torch.save(model.state_dict(), run_dir / "model_best.pt")
 
-        # Early stopping (by val_loss)
-        if epoch >= MIN_EPOCHS - 1:
-            if val_loss < best_val_loss - 1e-4:
-                best_val_loss = val_loss
-                no_improve    = 0
-            else:
-                no_improve += 1
-                if no_improve >= EARLY_STOP_PATIENCE:
-                    break
-        elif val_loss < best_val_loss:
+        # Early stopping (by val_loss): track from epoch 1, stop only after MIN_EPOCHS
+        if val_loss < best_val_loss * (1 - EARLY_STOP_THRESHOLD):
             best_val_loss = val_loss
+            no_improve    = 0
+        else:
+            no_improve += 1
+        if epoch + 1 >= MIN_EPOCHS and no_improve >= EARLY_STOP_PATIENCE:
+            break
 
     final_epoch  = epoch + 1
     final_metric = val_acc

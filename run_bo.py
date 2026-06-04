@@ -15,6 +15,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -117,8 +118,6 @@ def run_config(task, config, run_id_base, output_dir, rdm_inputs,
     else:
         raise ValueError(f"Unknown task paradigm: {task.paradigm!r}. Expected 'supervised', 'rnn', or 'rl'.")
 
-    flag = "OK" if metric >= task.success_threshold else "FAILED"
-    print(f"        performance={metric:.4f}  [{flag}]")
     return metric
 
 
@@ -227,6 +226,7 @@ def main():
         pretty = {k: (round(v, 6) if isinstance(v, float) else v)
                   for k, v in config.items()}
         print(f"  config: {json.dumps(pretty, separators=(',', ':'))}")
+        t_network = time.time()
 
         val_acc = run_config(
             task                = task,
@@ -246,7 +246,16 @@ def main():
             save_activations     = not args.no_save_activations,
         )
 
-        print(f"  performance = {val_acc:.4f}")
+        elapsed_net = time.time() - t_network
+        flag = "OK" if val_acc >= task.success_threshold else "FAILED"
+        cat_str = "  ".join(f"{k}={config[k]}" for k in sorted(config)
+                            if k not in ("learning_rate","l1_reg","l2_reg","hidden_size","batch_size"))
+        cont_str = (f"lr={config['learning_rate']:.2e}  "
+                    f"h={int(config['hidden_size'])}  "
+                    + (f"bs={int(config['batch_size'])}  " if "batch_size" in config else "")
+                    + f"l1={config['l1_reg']:.2e}  l2={config['l2_reg']:.2e}")
+        print(f"  >> {cat_str}  |  {cont_str}  |  perf={val_acc:.4f} [{flag}]  ({elapsed_net:.0f}s)",
+              flush=True)
 
         observations.append({
             "iteration":      iteration,
