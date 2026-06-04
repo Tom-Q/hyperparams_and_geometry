@@ -48,7 +48,7 @@ def _cont_params_for_task(task):
     Includes learning_rate, l1_reg, l2_reg, plus any CONT_FROM_CAT params
     present in the task's categorical_space (hidden_size, batch_size).
     """
-    l1_hi = getattr(task, "l1_range_hi", 1e-2)
+    l1_hi = getattr(task, "l1_range_hi", 1e-1)
     l2_hi = getattr(task, "l2_range_hi", 1e-2)
     params = [
         ("learning_rate", 1e-5, 1e-1),
@@ -194,20 +194,17 @@ def fit_gp(X, Y, n_cont):
 
 def compute_n_eff(x_query, observations, cont_params, cat_params, h=0.2):
     """
-    Compute N_eff(x_query) = Σ_i K(x_query, x_i) over primary observations,
+    Compute N_eff(x_query) = Σ_i K(x_query, x_i) over all observations
+    (primaries and repeats).
     Euclidean distance in unit space: squared unit distance for continuous/ordinal
     dims, binary (0 same, 1 different) for unordered categorical dims.
     No normalisation by number of dimensions.
-
-    x_query: config dict. Repeat observations are excluded.
     """
     if not observations:
         return 0.0
     h2 = 2.0 * h * h
     total  = 0.0
     for obs in observations:
-        if obs.get("is_repeat"):
-            continue
         xi = obs["config"]
         d2 = 0.0
         for name, raw_lo, raw_hi in cont_params:
@@ -279,7 +276,7 @@ class UCBoverNeff(AnalyticAcquisitionFunction):
     Euclidean (no per-dimension normalisation).
     """
 
-    def __init__(self, model, beta, primary_observations, cont_params, cat_params, h):
+    def __init__(self, model, beta, observations, cont_params, cat_params, h):
         super().__init__(model=model)
         self.register_buffer("sqrt_beta", torch.tensor(beta ** 0.5, dtype=torch.double))
         self.h2     = 2.0 * h * h
@@ -293,7 +290,7 @@ class UCBoverNeff(AnalyticAcquisitionFunction):
                 return o["cont_unit_vals"][:len(cont_params)]
             return [_cont_to_unit_val(o["config"][name], lo, hi) for name, lo, hi in cont_params]
         self.register_buffer("obs_cont", torch.tensor(
-            [_cont_units(o) for o in primary_observations], dtype=torch.double))
+            [_cont_units(o) for o in observations], dtype=torch.double))
 
         # For each cat dim: store obs values and (for ordinal) a unit-value lookup table.
         ord_obs_cols, unord_obs_cols = [], []
@@ -301,7 +298,7 @@ class UCBoverNeff(AnalyticAcquisitionFunction):
         self.unord_cat_dims = []
 
         for j, (name, choices) in enumerate(cat_params):
-            obs_ints = [choices.index(o["config"][name]) for o in primary_observations]
+            obs_ints = [choices.index(o["config"][name]) for o in observations]
             if name in ORDINAL_PARAMS:
                 self.ord_cat_dims.append(j)
                 k = len(self.ord_cat_dims) - 1
@@ -350,7 +347,7 @@ class UCBoverNeff(AnalyticAcquisitionFunction):
 # Saturating acquisition: optimise UCBoverNeff jointly over all combos
 # ---------------------------------------------------------------------------
 
-def _suggest_saturating(gp, primary_observations, cont_params, cat_params, beta, h=0.2):
+def _suggest_saturating(gp, observations, cont_params, cat_params, beta, h=0.2):
     """
     Build one UCBoverNeff acquisition function, then call optimize_acqf_mixed
     with the full list of categorical combos.  BoTorch handles the joint
@@ -367,7 +364,7 @@ def _suggest_saturating(gp, primary_observations, cont_params, cat_params, beta,
         for vals in iproduct(*[ch for _, ch in cat_params])
     ]
 
-    acqf = UCBoverNeff(gp, beta, primary_observations, cont_params, cat_params, h)
+    acqf = UCBoverNeff(gp, beta, observations, cont_params, cat_params, h)
 
     bounds = torch.zeros(2, n_dims, dtype=torch.double)
     bounds[1, :n_cont] = 1.0
@@ -439,7 +436,7 @@ def suggest_next(observations, task, beta=4.0, h=0.2, n_sobol=N_SOBOL):
         gp   = fit_gp(X, Y, n_cont)
 
         best_unit, best_combo = _suggest_saturating(
-            gp, primary_obs, cont_params, cat_params, beta, h=h,
+            gp, observations, cont_params, cat_params, beta, h=h,
         )
         combo     = best_combo
         combo_idx = next(i for i, c in enumerate(all_combos)

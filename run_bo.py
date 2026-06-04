@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from tasks import TASKS
 from src.train_supervised import train_network as train_supervised
 from src.train_rl import train_network as train_rl
+from src.train_rnn import train_network as train_rnn
 from src.bo import (
     get_all_combos, cat_params_for_task, suggest_next,
     save_state, load_state, build_run_counts,
@@ -57,12 +58,15 @@ def parse_args():
                    help="RL: steps over which epsilon decays linearly to epsilon-end")
     p.add_argument("--eval-interval",   type=int,   default=None,
                    help="RL: steps between evaluations (default: train_rl.EVAL_INTERVAL)")
+    p.add_argument("--no-save-activations", action="store_true",
+                   help="Skip saving activations and model checkpoints (for test runs)")
     return p.parse_args()
 
 
 def run_config(task, config, run_id_base, output_dir, rdm_inputs,
                ds_train=None, ds_val=None, env_factory=None, max_epochs_override=None,
-               epsilon_start=None, epsilon_end=0.0, epsilon_decay_steps=None, eval_interval=None):
+               epsilon_start=None, epsilon_end=0.0, epsilon_decay_steps=None, eval_interval=None,
+               save_activations=True):
     run_dir = Path(output_dir) / f"{run_id_base}_r0"
     print(f"    ->  {run_dir.name}")
 
@@ -80,6 +84,19 @@ def run_config(task, config, run_id_base, output_dir, rdm_inputs,
             epsilon_end          = epsilon_end,
             epsilon_decay_steps  = epsilon_decay_steps,
             eval_interval        = eval_interval if eval_interval is not None else EVAL_INTERVAL,
+            save_activations     = save_activations,
+        )
+    elif task.paradigm == "rnn":
+        metric = train_rnn(
+            task                = task,
+            config              = config,
+            run_dir             = run_dir,
+            rdm_inputs          = rdm_inputs,
+            ds_train            = ds_train,
+            ds_val              = ds_val,
+            max_epochs_override = max_epochs_override,
+            verbose             = True,
+            save_activations    = save_activations,
         )
     else:
         metric = train_supervised(
@@ -91,6 +108,7 @@ def run_config(task, config, run_id_base, output_dir, rdm_inputs,
             ds_val              = ds_val,
             max_epochs_override = max_epochs_override,
             verbose             = True,
+            save_activations    = save_activations,
         )
 
     flag = "OK" if metric >= task.success_threshold else "FAILED"
@@ -218,6 +236,7 @@ def main():
             epsilon_end          = args.epsilon_end,
             epsilon_decay_steps  = args.epsilon_decay_steps,
             eval_interval        = args.eval_interval,
+            save_activations     = not args.no_save_activations,
         )
 
         print(f"  mean_metric = {val_acc:.4f}")

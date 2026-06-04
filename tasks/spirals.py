@@ -53,7 +53,7 @@ class SpiralsTask(Task):
     success_threshold = 0.85
     chance_perf       = 1 / 3    # 3-way classification
     metric_name       = "val_acc"
-    max_epochs        = 300
+    max_epochs        = None
 
     def get_data(self, data_dir="data", seed=42):
         x_train, y_train = _generate_spirals(N_TRAIN // 3, seed=seed)

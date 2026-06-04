@@ -2,7 +2,7 @@
 
 **Authors:** Thomas Colin  
 **Collaborators:** Kirsten, Clay  
-**Status:** Active development — smoke testing BO pipeline
+**Status:** Active development — RL and RNN test runs completed/in progress
 
 ---
 
@@ -31,10 +31,10 @@ Nine tasks are implemented across three paradigms. All share the same BO infrast
 | Fashion-MNIST 10-way | `fashion_10way` | Supervised MLP | 784-dim | 10 (CE) | 4–1024 | ≥ 0.85 val acc | 100 | 10 classes × 10 exemplars |
 | Spirals (3-arm) | `spirals` | Supervised MLP | 2-dim | 3 (CE) | 16–256 | ≥ 0.85 val acc | 198 | 3 arms × 66 evenly spaced noiseless points |
 | 8-bit Parity | `parity` | Supervised MLP | 8-dim | 1 (BCE) | 16–256 | ≥ 0.95 val acc | 118 | Up to 20 patterns per Hamming weight 0–8 |
-| MNIST row-by-row | `mnist_rnn` | RNN | 28-dim per step, 28 steps | 10 (CE) | 16–512 | ≥ 0.90 val acc | 100 | 10 digits × 10 exemplars (as sequences) |
-| Adding problem | `adding` | RNN | 2-dim per step, 50 steps | 1 (MSE) | 16–512 | MSE < 0.02 | 100 | 100 fixed sequences (seed 200) |
-| CartPole-v1 | `cartpole` | RL (Q-learning) | 4-dim state | 2 Q-values | 4–256 | ≥ 195 mean return | 196 | 14×14 grid over (pole angle, pole angular velocity) |
-| FourRooms | `fourrooms` | RL (Q-learning) | 61-dim RBF | 4 Q-values | 8–512 | ≥ 0.80 mean return | 61 | All non-wall cells, RBF-encoded |
+| MNIST row-by-row | `mnist_rnn` | RNN | 28-dim per step, 28 steps | 10 (CE) | 16–256 | ≥ 0.90 val acc | 100 | 10 digits × 10 exemplars (as sequences) |
+| Adding problem | `adding` | RNN | 2-dim per step, 50 steps | 1 (MSE) | 16–256 | MSE < 0.02 | 100 | 100 fixed sequences (seed 200) |
+| CartPole-v1 | `cartpole` | RL (Q-learning) | 4-dim state | 2 Q-values | 16–256 | ≥ 195 mean return | 196 | 14×14 grid over (pole angle, pole angular velocity) |
+| FourRooms | `fourrooms` | RL (Q-learning) | 61-dim RBF | 4 Q-values | 16–256 | ≥ 0.80 mean return | 61 | All non-wall cells, RBF-encoded |
 
 ### Notes on specific tasks
 
@@ -42,7 +42,7 @@ Nine tasks are implemented across three paradigms. All share the same BO infrast
 
 **Spirals.** Three-arm Archimedean spiral in 2D (1000 training points per arm, 200 val per arm). Noise is additive Gaussian with σ = 0.1 × radius. RDM stimuli are 66 noiseless, evenly-spaced points per arm — no randomness involved in the stimulus set.
 
-**Parity.** All 256 possible 8-bit patterns are used for both training and validation (the function is deterministic, so the task is memorisation). RDM stimuli are stratified: up to 20 patterns per Hamming weight (number of 1-bits), giving 118 stimuli total. L1 and L2 regularisation are capped at 0.01 for this task (vs. 0.1 globally) since heavy regularisation prevents the high-order weight interactions parity requires. Note that train and val sets are identical; val accuracy therefore tracks train accuracy throughout.
+**Parity.** All 256 possible 8-bit patterns are used for both training and validation (the function is deterministic, so the task is memorisation). RDM stimuli are stratified: up to 20 patterns per Hamming weight (number of 1-bits), giving 118 stimuli total. Note that train and val sets are identical; val accuracy therefore tracks train accuracy throughout.
 
 **Adding problem.** Each sequence consists of T=50 steps; each step is a (value, flag) pair where value ∈ [0,1] and exactly 2 flags are 1. The target is the sum of the two flagged values. Success threshold is MSE < 0.02 (a network that always predicts the mean of ~1.0 achieves MSE ≈ 0.17, so this is a meaningful threshold).
 
@@ -85,7 +85,7 @@ and no `batch_size` (online Q-learning). Discount factor `gamma` is fixed at 0.9
 | `cell_type` | rnn (Elman), gru |
 | `n_rnn_layers` | 1, 2 |
 | `optimizer` | sgd, adam |
-| `init_scale` | 0.01, 1.0 |
+| `init_scale` | 0.1, 1.0 |
 
 This gives **2 × 2 × 2 × 2 = 16 categorical combinations** for RNN tasks.
 
@@ -99,9 +99,9 @@ in `bo_state.json` as `cont_unit_vals`.
 | Parameter | Range | Paradigms | Notes |
 |---|---|---|---|
 | `hidden_size` | [16, 256] | all | Rounded to nearest integer |
-| `batch_size` | [1, 64] (supervised/RL); [8, 64] (RNN) | supervised, RNN | Rounded to nearest integer |
+| `batch_size` | [1, 64] | supervised, RNN | Rounded to nearest integer |
 | `learning_rate` | [1×10⁻⁵, 1×10⁻¹] | all | Passed directly to optimizer |
-| `l1_reg` | [1×10⁻⁶, 1×10⁻²] | all | Explicit L1 penalty on weight matrices only |
+| `l1_reg` | [1×10⁻⁶, 1×10⁻¹] | all | Explicit L1 penalty on weight matrices only |
 | `l2_reg` | [1×10⁻⁶, 1×10⁻²] | all | Passed as `weight_decay` to optimizer |
 
 RL tasks have no `batch_size` continuous dim (online Q-learning, batch size = 1 implicitly).
@@ -125,7 +125,7 @@ requiring explicit round-robin or culling in the GP phase.
 
 ### 4.2 Phases
 
-**Sobol phase** (first N_SOBOL = 100 observations): quasi-random Sobol sequence for
+**Sobol phase** (first N_SOBOL = 200 primary observations): quasi-random Sobol sequence for
 continuous dims, with round-robin over categorical combos to ensure all are visited
 at least once before the GP takes over.
 
@@ -143,7 +143,7 @@ mixed kernel.
 - Ordinal categoricals (depth, n_rnn_layers): mapped to [0,1] via log-scale rank
 - Unordered categoricals (activation, optimizer, init_scale, etc.): integer indices
 
-**Target:** normalised accuracy `y = (raw - chance) / (1 - chance)`, clamped to [0,1].
+**Target:** normalised metric `y = (raw - chance_perf) / (max_metric - chance_perf)`, clamped to [0,1]. `chance_perf` and `max_metric` are task-specific attributes.
 
 **MLL fitting:** `ExactMarginalLogLikelihood` via `fit_gpytorch_mll` (L-BFGS-B).
 
@@ -153,9 +153,22 @@ mixed kernel.
 N_eff(x) = Σ_i  exp(-d²(x, x_i) / 2h²)
 ```
 
-summed over primary observations only (repeats excluded). Distance is Euclidean
+summed over **all observations** (primaries and repeats). Distance is Euclidean
 in unit space: squared distance for continuous and ordinal dims, binary (0/1) for
-unordered categoricals. Default **h = 0.15**.
+unordered categoricals. Because the binary categorical penalty is 1 and h is small,
+exp(−1/2h²) ≈ 0, so observations in different categorical combos contribute
+negligibly — each combo's continuous subspace is effectively saturated independently.
+
+**h is paradigm-specific**, chosen so that the 90th percentile of Sobol-equivalent
+N_eff reaches 0.5 at 1000 total observations:
+
+| Paradigm | h |
+|----------|-------|
+| RL | 0.116 |
+| Supervised | 0.160 |
+| RNN | 0.148 |
+
+See `output/h_selection.md` for full derivation.
 
 ### 4.5 Acquisition optimisation
 
@@ -178,8 +191,9 @@ existing observations and continues from where it left off.
 ### 4.8 Repeat infrastructure
 
 Every 4th primary observation triggers a noise-estimation repeat of a previous config
-(P P P P R pattern). Repeats are not counted in N_eff and are not selected by the
-acquisition function — they exist solely to estimate intra-config variance.
+(P P P P R pattern, ~20% repeats). Repeats are included in N_eff (they represent real
+observations of a region) and in the GP fit, but are not selected by the acquisition
+function — they exist solely to estimate intra-config variance.
 
 ---
 
@@ -214,12 +228,7 @@ For Elman RNN, the PyTorch default nonlinearity (`tanh`) is used. LSTM is not in
 
 ### 6.1 Supervised training loop
 
-Each network is trained for up to `max_epochs` epochs. Task-specific epoch limits (where set) override the global default of 100.
-
-| Task | Max epochs |
-|---|---|
-| Spirals | 300 |
-| All others (supervised MLP) | 100 (global default) |
+Each network is trained for up to `max_epochs` epochs. All supervised and RNN tasks use the global default of **100 epochs** — no per-task overrides.
 
 **Batch loading:** standard PyTorch DataLoader with shuffling each epoch. Validation is done with batch size 512, no shuffling.
 
@@ -238,14 +247,31 @@ Each network is trained for up to `max_epochs` epochs. Task-specific epoch limit
 
 Total loss per step: `criterion(logits, targets) + l1_coef × Σ |W_ij|`
 
-### 6.2 Optimizers
+### 6.2 RL training loop
+
+Online Q-learning (no replay buffer — the non-iid nature of the training signal is
+intentional). Each network trains for up to **100,000 environment steps**. Training
+stops early if the success threshold is reached.
+
+**Epsilon-greedy exploration:** ε decays linearly from 0.5 to 0 over 100,000 steps.
+Policy is evaluated every 5,000 steps (mean return over 20 episodes).
+
+**Metric stored:** mean episode return at the best evaluation point.
+For the GP, returns are normalised: `y = (raw - chance_perf) / (max_metric - chance_perf)`.
+
+**Adding task metric:** `train_rnn` returns *negative* MSE (so higher = better, consistent
+with all other tasks). `chance_perf = −0.1667` (negated MSE of a naive predictor always
+outputting the mean), `max_metric = 0.0` (perfect predictor). `success_threshold = −0.02`
+corresponds to MSE < 0.02.
+
+### 6.3 Optimizers
 
 | Optimizer | Parameters |
 |---|---|
 | SGD | `lr=learning_rate`, `momentum=0.9`, `weight_decay=l2_reg` |
 | Adam | `lr=learning_rate`, `weight_decay=l2_reg` (betas at PyTorch defaults: 0.9, 0.999) |
 
-### 6.3 Weight initialisation
+### 6.4 Weight initialisation
 
 All linear layers (including the RNN readout head) are initialised with:
 - **ReLU networks:** Kaiming normal (`fan_in` mode)
@@ -257,13 +283,13 @@ Biases are always initialised to zero.
 `init_scale` ∈ {0.1, 1.0} across all tasks. `init_scale = 0.1` produces near-zero
 initial weights; `init_scale = 1.0` uses the standard initialisation directly.
 
-### 6.4 Early stopping
+### 6.5 Early stopping
 
 - **Minimum epochs:** 15. Early stopping is not considered before this.
 - **Patience:** 10 epochs without improvement in validation *loss* (threshold 1×10⁻⁴). Note: early stopping watches `val_loss`, not `val_acc`.
 - **Best model:** tracked separately by `val_acc` (or the task's `metric_name`). The best checkpoint is saved to `model_best.pt`.
 
-### 6.5 Activation checkpoints
+### 6.6 Activation checkpoints
 
 Hidden-layer activations are saved on the fixed RDM stimulus set at **log₄-spaced training steps**: steps 1, 4, 16, 64, 256, 1024, 4096, … up to and including the final training step. This gives approximately equal coverage per order of magnitude of training progress.
 

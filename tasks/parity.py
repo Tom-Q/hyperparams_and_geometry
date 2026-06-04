@@ -44,9 +44,7 @@ class ParityTask(Task):
     input_size        = N_BITS
     output_size       = 1
     n_steps           = None
-    l1_range_hi       = 1e-2
-    l2_range_hi       = 1e-2
-    max_epochs        = 100
+    max_epochs        = None
     success_threshold = 0.95
     chance_perf       = 0.5      # binary classification
     metric_name       = "val_acc"

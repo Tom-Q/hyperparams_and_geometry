@@ -31,7 +31,8 @@ def _evaluate(model, loader, criterion, device, multiclass=False):
 
 
 def train_network(task, config, run_dir, rdm_inputs, ds_train=None, ds_val=None,
-                  ds_test=None, device=None, max_epochs_override=None, verbose=False):
+                  ds_test=None, device=None, max_epochs_override=None, verbose=False,
+                  save_activations=True):
     """Train one RNN. Returns best metric value (float)."""
     run_dir = Path(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -99,7 +100,7 @@ def train_network(task, config, run_dir, rdm_inputs, ds_train=None, ds_val=None,
             optimizer.step()
             epoch_loss += loss.item() * len(y)
 
-            if global_step in checkpoint_steps:
+            if save_activations and global_step in checkpoint_steps:
                 save_activations_rnn(model, rdm_tensor,
                                      run_dir / f"step_{global_step:07d}",
                                      device, time_indices=time_indices)
@@ -144,14 +145,12 @@ def train_network(task, config, run_dir, rdm_inputs, ds_train=None, ds_val=None,
     final_epoch  = epoch + 1
     final_metric = val_loss if use_mse else val_acc
 
-    # Save final activations from current (end-of-training) weights
-    save_activations_rnn(model, rdm_tensor, run_dir / "final",
-                         device, time_indices=time_indices)
-
-    # Save best activations by reloading best weights
-    model.load_state_dict(torch.load(run_dir / "model_best.pt", map_location=device))
-    save_activations_rnn(model, rdm_tensor, run_dir / "best",
-                         device, time_indices=time_indices)
+    if save_activations:
+        save_activations_rnn(model, rdm_tensor, run_dir / "final",
+                             device, time_indices=time_indices)
+        model.load_state_dict(torch.load(run_dir / "model_best.pt", map_location=device))
+        save_activations_rnn(model, rdm_tensor, run_dir / "best",
+                             device, time_indices=time_indices)
 
     # Test-set evaluation using best weights (optional)
     test_metric = None
@@ -179,4 +178,4 @@ def train_network(task, config, run_dir, rdm_inputs, ds_train=None, ds_val=None,
     with open(run_dir / "history.json", "w") as f:
         json.dump(history, f, indent=2)
 
-    return float(best_model_metric)
+    return -float(best_model_metric) if use_mse else float(best_model_metric)

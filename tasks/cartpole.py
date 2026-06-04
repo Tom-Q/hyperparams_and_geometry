@@ -34,7 +34,7 @@ class CartPoleTask(Task):
     chance_perf       = 0.0   # random policy ~23 steps, using 0 as floor (negligible difference)
     max_metric        = 500.0 # maximum possible return (CartPole-v1 episode cap)
     metric_name       = "mean_return"
-    max_steps         = 500_000
+    max_steps         = 100_000
 
     def get_data(self, data_dir="data", seed=42):
         import gymnasium as gym

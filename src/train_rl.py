@@ -41,7 +41,7 @@ def _eval_mean_return(model, env_factory, n_episodes, device):
 def train_network(task, config, run_dir, rdm_inputs, env_factory,
                   device=None, max_steps_override=None, verbose=False,
                   epsilon_start=EPSILON, epsilon_end=0.0, epsilon_decay_steps=None,
-                  eval_interval=EVAL_INTERVAL):
+                  eval_interval=EVAL_INTERVAL, save_activations=True):
     """Online Q-learning. Returns best mean_return (float)."""
     run_dir = Path(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -111,7 +111,7 @@ def train_network(task, config, run_dir, rdm_inputs, env_factory,
         loss.backward()
         optimizer.step()
 
-        if global_step in checkpoint_steps:
+        if save_activations and global_step in checkpoint_steps:
             save_activations_mlp(model, stimuli_t,
                                  run_dir / f"step_{global_step:07d}", device)
 
@@ -145,12 +145,10 @@ def train_network(task, config, run_dir, rdm_inputs, env_factory,
 
     final_return = history[-1]["mean_return"]
 
-    # Save final activations from current (end-of-training) weights
-    save_activations_mlp(model, stimuli_t, run_dir / "final", device)
-
-    # Save best activations by reloading best weights
-    model.load_state_dict(torch.load(run_dir / "model_best.pt", map_location=device))
-    save_activations_mlp(model, stimuli_t, run_dir / "best", device)
+    if save_activations:
+        save_activations_mlp(model, stimuli_t, run_dir / "final", device)
+        model.load_state_dict(torch.load(run_dir / "model_best.pt", map_location=device))
+        save_activations_mlp(model, stimuli_t, run_dir / "best", device)
 
     metadata = {
         "task":         task.name,

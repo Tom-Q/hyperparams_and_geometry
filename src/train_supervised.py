@@ -31,7 +31,8 @@ def _evaluate(model, loader, criterion, device, multiclass=False):
 
 
 def train_network(task, config, run_dir, rdm_inputs, ds_train=None, ds_val=None,
-                  ds_test=None, device=None, max_epochs_override=None, verbose=False):
+                  ds_test=None, device=None, max_epochs_override=None, verbose=False,
+                  save_activations=True):
     """Train one MLP network for the given task. Returns best val_acc (float)."""
     run_dir = Path(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -95,7 +96,7 @@ def train_network(task, config, run_dir, rdm_inputs, ds_train=None, ds_val=None,
             optimizer.step()
             epoch_loss += loss.item() * len(y)
 
-            if global_step in checkpoint_steps:
+            if save_activations and global_step in checkpoint_steps:
                 save_activations_mlp(model, stimuli_t,
                                      run_dir / f"step_{global_step:07d}", device)
 
@@ -135,12 +136,10 @@ def train_network(task, config, run_dir, rdm_inputs, ds_train=None, ds_val=None,
     final_epoch  = epoch + 1
     final_metric = val_acc
 
-    # Save final activations from current (end-of-training) weights
-    save_activations_mlp(model, stimuli_t, run_dir / "final", device)
-
-    # Save best activations by reloading best weights
-    model.load_state_dict(torch.load(run_dir / "model_best.pt", map_location=device))
-    save_activations_mlp(model, stimuli_t, run_dir / "best", device)
+    if save_activations:
+        save_activations_mlp(model, stimuli_t, run_dir / "final", device)
+        model.load_state_dict(torch.load(run_dir / "model_best.pt", map_location=device))
+        save_activations_mlp(model, stimuli_t, run_dir / "best", device)
 
     # Test-set evaluation using best weights (optional)
     test_metric = None

@@ -15,12 +15,11 @@ ROOT = Path(__file__).parent.parent
 
 COMMON = [
     sys.executable, str(ROOT / "run_bo.py"),
-    "--n-iter",              "187",
+    "--n-iter",              "312",
     "--n-sobol",             "50",
     "--output-dir",          "output/experiments_rl_epsilon_test",
     "--beta",                "4.0",
     "--h",                   "0.15",
-    "--max-epochs",          "100000",
     "--epsilon-start",       "0.5",
     "--epsilon-end",         "0.0",
     "--epsilon-decay-steps", "100000",

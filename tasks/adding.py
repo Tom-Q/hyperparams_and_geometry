@@ -39,8 +39,9 @@ class AddingTask(Task):
     input_size        = 2
     output_size       = 1
     n_steps           = T
-    success_threshold = 0.02   # MSE < 0.02 counts as a successful network
-    chance_perf       = 0.0    # regression; no meaningful chance baseline
+    success_threshold = -0.02    # -mse > -0.02  ↔  mse < 0.02
+    chance_perf       = -0.1667  # negated MSE of naive predictor (always predict 1.0): Var[v1+v2] = 1/6
+    max_metric        = 0.0      # negated MSE of perfect predictor
     metric_name       = "val_mse"
     rdm_time_indices  = RDM_TIME_INDICES
 
