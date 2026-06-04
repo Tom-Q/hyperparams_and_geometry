@@ -8,7 +8,7 @@ class RNNModel(nn.Module):
         super().__init__()
         self.cell_type = cell_type.lower()
 
-        rnn_cls = {"rnn": nn.RNN, "gru": nn.GRU, "lstm": nn.LSTM}[self.cell_type]
+        rnn_cls = {"rnn": nn.RNN, "gru": nn.GRU}[self.cell_type]
         rnn_kwargs = dict(
             input_size  = input_size,
             hidden_size = hidden_size,
@@ -16,7 +16,7 @@ class RNNModel(nn.Module):
             batch_first = True,
         )
         if self.cell_type == "rnn":
-            rnn_kwargs["nonlinearity"] = "tanh"
+            rnn_kwargs["nonlinearity"] = "tanh"  # PyTorch default; explicit for clarity
         self.rnn = rnn_cls(**rnn_kwargs)
         self.head = nn.Linear(hidden_size, output_size)
         self._init_weights(init_scale)

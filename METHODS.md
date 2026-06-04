@@ -178,7 +178,7 @@ per combo. Parameters: 3 restarts, 32 raw samples, 20 L-BFGS-B iterations.
 
 ### 4.6 Scoring
 
-`mean_metric` is the raw validation metric (no penalty or thresholding). The GP
+`performance` is the raw validation metric (no penalty or thresholding). The GP
 sees the full gradient from chance-level up through successful networks.
 `success_threshold` is used only for console reporting.
 
@@ -323,7 +323,7 @@ At the task level, `output/experiments/<task>/bo_state.json` stores the full obs
     "config": { ... },
     "cont_unit_vals": [0.42, 0.71, ...],
     "val_accs": [0.923],
-    "mean_metric": 0.923,
+    "performance": 0.923,
     "is_repeat": false,
     "repeat_of": null
   },
@@ -332,7 +332,7 @@ At the task level, `output/experiments/<task>/bo_state.json` stores the full obs
 ```
 
 `cont_unit_vals` stores the raw pre-rounding unit values for continuous dims (used by
-the GP to see the actual explored location, not the snapped integer). `mean_metric` is
+the GP to see the actual explored location, not the snapped integer). `performance` is
 the raw validation metric passed to the GP. `val_accs` are per-repetition values.
 
 ---

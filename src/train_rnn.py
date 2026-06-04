@@ -154,10 +154,10 @@ def train_network(task, config, run_dir, rdm_inputs, ds_train=None, ds_val=None,
 
     # Test-set evaluation using best weights (optional)
     test_metric = None
-    if ds_test is not None and not use_mse:
+    if ds_test is not None:
         test_loader = make_loader(ds_test, batch_size=256, shuffle=False)
-        _, test_acc = _evaluate(model, test_loader, criterion, device, multiclass)
-        test_metric = round(float(test_acc), 6)
+        test_loss, test_acc = _evaluate(model, test_loader, criterion, device, multiclass)
+        test_metric = round(float(test_loss if use_mse else test_acc), 6)
 
     metadata = {
         "task":         task.name,
@@ -178,4 +178,6 @@ def train_network(task, config, run_dir, rdm_inputs, ds_train=None, ds_val=None,
     with open(run_dir / "history.json", "w") as f:
         json.dump(history, f, indent=2)
 
+    # MSE is negated so the BO can always maximise: higher = better across all tasks.
+    # The adding task's chance_perf and max_metric are defined accordingly (both negative/zero).
     return -float(best_model_metric) if use_mse else float(best_model_metric)

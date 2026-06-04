@@ -53,16 +53,12 @@ def load_mnist_splits(data_dir="data", seed=42):
     def _build_dataset(images, digits):
         images = torch.tensor(images) if not isinstance(images, torch.Tensor) else images
         digits = torch.tensor(digits) if not isinstance(digits, torch.Tensor) else digits
-        imgs0 = images
-        imgs1 = images
-        digs0 = digits
-        digs1 = digits
         task0 = torch.zeros(len(images))
         task1 = torch.ones(len(images))
-        lab0 = _make_labels(digs0, 0)
-        lab1 = _make_labels(digs1, 1)
-        all_images = torch.cat([imgs0, imgs1], dim=0)
-        all_digits = torch.cat([digs0, digs1], dim=0)
+        lab0 = _make_labels(digits, 0)
+        lab1 = _make_labels(digits, 1)
+        all_images = torch.cat([images, images], dim=0)
+        all_digits = torch.cat([digits, digits], dim=0)
         all_tasks = torch.cat([task0, task1], dim=0)
         all_labels = torch.cat([lab0, lab1], dim=0)
         return DualTaskMNIST(all_images, all_digits, all_tasks, all_labels)

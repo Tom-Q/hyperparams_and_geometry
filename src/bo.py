@@ -21,7 +21,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from botorch.acquisition import AnalyticAcquisitionFunction, qUpperConfidenceBound
+from botorch.acquisition import AnalyticAcquisitionFunction
 from botorch.fit import fit_gpytorch_mll
 from botorch.models.gp_regression_mixed import MixedSingleTaskGP
 from botorch.optim import optimize_acqf, optimize_acqf_mixed
@@ -170,7 +170,7 @@ def build_XY(observations, cont_params, cat_params, chance_perf=0.0, max_metric=
     X = torch.stack([encode_config(o, cont_params, cat_params)
                      for o in observations])
     Y = torch.tensor(
-        [[_normalise_metric(o["mean_metric"], chance_perf, max_metric)] for o in observations],
+        [[_normalise_metric(o["performance"], chance_perf, max_metric)] for o in observations],
         dtype=torch.double,
     )
     return X, Y
@@ -477,62 +477,3 @@ def load_state(path):
     with open(path) as f:
         return json.load(f)
 
-
-# ---------------------------------------------------------------------------
-# Legacy helpers (used by run_spirals_culling_test*.py; not part of main path)
-# ---------------------------------------------------------------------------
-
-def _make_bounds_legacy(cont_params, cat_params):
-    return _make_bounds(cont_params, cat_params)
-
-
-def suggest_continuous_for_combo(gp, combo, bounds, cat_params, n_cont, beta=8.0):
-    acqf = qUpperConfidenceBound(model=gp, beta=beta)
-    from botorch.optim import optimize_acqf_mixed
-    candidate, _ = optimize_acqf_mixed(
-        acq_function        = acqf,
-        bounds              = bounds,
-        fixed_features_list = [_fixed_features_for_combo(combo, cat_params, n_cont)],
-        q                   = 1,
-        num_restarts        = 10,
-        raw_samples         = 128,
-    )
-    return candidate.squeeze(0)[:n_cont]
-
-
-def _fixed_features_for_combo(combo, cat_params, n_cont):
-    return {
-        n_cont + j: float(choices.index(combo[name]))
-        for j, (name, choices) in enumerate(cat_params)
-    }
-
-
-def _combo_ucb_max(gp, combo, cont_params, cat_params, beta, n_candidates=1000):
-    """Max UCB over a Sobol grid for a fixed combo (legacy culling scripts)."""
-    n_cont = len(cont_params)
-    engine = SobolEngine(dimension=n_cont, scramble=True, seed=0)
-    unit_cont = engine.draw(n_candidates).double()
-
-    cat_indices = torch.tensor(
-        [float(choices.index(combo[name])) for name, choices in cat_params],
-        dtype=torch.double,
-    )
-    cat_part = cat_indices.unsqueeze(0).expand(n_candidates, -1)
-    X_cand = torch.cat([unit_cont, cat_part], dim=1)
-
-    with torch.no_grad():
-        posterior = gp.posterior(X_cand)
-        mean      = posterior.mean.squeeze(-1)
-        variance  = posterior.variance.squeeze(-1).clamp_min(0)
-        ucb       = mean + math.sqrt(beta) * variance.sqrt()
-
-    return float(ucb.max())
-
-
-def get_active_combos(gp, all_combos, cont_params, cat_params, success_threshold, beta):
-    """Legacy: return combos whose UCB upper bound exceeds success_threshold."""
-    active = [
-        c for c in all_combos
-        if _combo_ucb_max(gp, c, cont_params, cat_params, beta) >= success_threshold
-    ]
-    return active if active else all_combos

@@ -105,7 +105,7 @@ def main():
             "config":         config,
             "cont_unit_vals": cont_unit_vals,
             "val_accs":       [val_acc],
-            "mean_metric":    val_acc,
+            "performance":    val_acc,
             "is_repeat":      False,
             "repeat_of":      None,
         })

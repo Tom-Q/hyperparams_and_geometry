@@ -112,7 +112,7 @@ def run_config(task, config, run_id_base, output_dir, rdm_inputs,
         )
 
     flag = "OK" if metric >= task.success_threshold else "FAILED"
-    print(f"        mean_metric={metric:.4f}  [{flag}]")
+    print(f"        performance={metric:.4f}  [{flag}]")
     return metric
 
 
@@ -202,7 +202,7 @@ def main():
 
         if repeat_config is not None:
             config         = repeat_config
-            cont_unit_vals = None
+            cont_unit_vals = observations[repeat_of_idx]["cont_unit_vals"]
             is_repeat      = True
             print(f"[{iteration+1}/{args.n_iter}]  REPEAT of run_{repeat_of_idx:04d}  (noise pair)")
         else:
@@ -239,14 +239,14 @@ def main():
             save_activations     = not args.no_save_activations,
         )
 
-        print(f"  mean_metric = {val_acc:.4f}")
+        print(f"  performance = {val_acc:.4f}")
 
         observations.append({
             "iteration":      iteration,
             "config":         config,
-            "cont_unit_vals": cont_unit_vals if not is_repeat else None,
+            "cont_unit_vals": cont_unit_vals,
             "val_accs":       [val_acc],
-            "mean_metric":    val_acc,
+            "performance":    val_acc,
             "is_repeat":      is_repeat,
             "repeat_of":      repeat_of_idx if is_repeat else None,
         })
@@ -268,8 +268,8 @@ def main():
     print(f"Primary runs: {len(primary_final)}  Repeats: {n_repeats_final}  "
           f"({100*n_repeats_final/len(observations):.1f}%)")
     print(f"Categorical coverage: {coverage_final}/{len(all_combos)} combos visited.")
-    best = max(primary_final, key=lambda o: o["mean_metric"])
-    print(f"Best mean_metric: {best['mean_metric']:.4f}")
+    best = max(primary_final, key=lambda o: o["performance"])
+    print(f"Best performance: {best['performance']:.4f}")
     print(f"Best config: {best['config']}")
 
 

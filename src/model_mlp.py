@@ -13,8 +13,9 @@ class MLP(nn.Module):
         act_name = activation.lower()
         act_cls  = ACTIVATIONS[act_name]
 
-        # Cap depth at 2 when hidden_size is very small (H//4 would be < 2)
-        effective_depth = min(depth, 2) if hidden_size < 8 else depth
+        if hidden_size < 8 and depth > 2:
+            print(f"WARNING: hidden_size={hidden_size} with depth={depth} produces degenerate layers (H//4 < 2).")
+        effective_depth = depth
         self.effective_depth = effective_depth
 
         # Layer sizes: input → H → H//2 → H//4 → output_size

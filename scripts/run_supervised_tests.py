@@ -23,7 +23,7 @@ TASKS = ["mnist_dual", "mnist_10way", "fashion_10way", "parity"]
 # Patterns to parse run_bo.py output
 RE_HEADER     = re.compile(r"\[(\d+)/(\d+)\].*combo #(\d+)\s+\(([^)]+)\)")
 RE_REPEAT     = re.compile(r"\[(\d+)/(\d+)\].*REPEAT")
-RE_MEAN       = re.compile(r"mean_metric\s*=\s*([0-9.]+)")
+RE_MEAN       = re.compile(r"performance\s*=\s*([0-9.]+)")
 RE_THRESHOLD  = re.compile(r"\[(OK|FAILED)\]")
 
 

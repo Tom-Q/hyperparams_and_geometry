@@ -188,14 +188,14 @@ def main():
             )
 
         scored      = [_score(m, task, penalty) for m in metrics]
-        mean_metric = float(np.mean(scored))
-        print(f"  mean_{task.metric_name} (scored) = {mean_metric:.4f}")
+        performance = float(np.mean(scored))
+        print(f"  mean_{task.metric_name} (scored) = {performance:.4f}")
 
         observations.append({
             "iteration":   iteration,
             "config":      config,
             "metrics":     metrics,
-            "mean_metric": mean_metric,
+            "performance": performance,
         })
         save_state(state_path, observations)
 
@@ -203,8 +203,8 @@ def main():
     run_counts_final = build_run_counts(observations, all_combos, cat_params)
     coverage_final   = sum(1 for c in run_counts_final if c > 0)
     print(f"Categorical coverage: {coverage_final}/{len(all_combos)} combos visited.")
-    best = max(observations, key=lambda o: o["mean_metric"])
-    print(f"Best mean_{task.metric_name}: {best['mean_metric']:.4f}")
+    best = max(observations, key=lambda o: o["performance"])
+    print(f"Best mean_{task.metric_name}: {best['performance']:.4f}")
     print(f"Best config: {best['config']}")
 
 
