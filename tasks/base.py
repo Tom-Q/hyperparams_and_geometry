@@ -12,7 +12,6 @@ class Task(ABC):
     chance_perf: float          # baseline for GP normalisation: 1/n_classes for classifiers, chance return for RL
     max_metric: float = 1.0     # ceiling for GP normalisation: 1.0 for accuracy tasks, max_return for RL
     metric_name: str            # "val_acc" | "mean_return" | "val_mse"
-    rdm_time_indices: list | None = None   # time steps to save for RNN tasks
     max_steps: int | None = None           # max env steps for RL tasks
     max_epochs: int | None = None          # per-task override for supervised/RNN
 

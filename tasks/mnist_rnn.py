@@ -31,7 +31,6 @@ class MNISTRNNTask(Task):
     success_threshold = 0.90
     chance_perf       = 0.1      # 10-way classification
     metric_name       = "val_acc"
-    rdm_time_indices  = [0, 2, 5, 8, 11, 13]   # 6 evenly spaced steps out of 14
 
     def get_data(self, data_dir="data", seed=42):
         train_x, train_y, _, _ = _mnist_to_sequences(data_dir)

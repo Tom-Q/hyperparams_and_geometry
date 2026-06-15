@@ -1,5 +1,6 @@
 import json
 import math
+import time
 from pathlib import Path
 
 import torch
@@ -73,6 +74,7 @@ def train_network(task, config, run_dir, rdm_inputs, ds_train=None, ds_val=None,
 
     history = []
 
+    t0                 = time.time()
     global_step        = 0
     best_val_loss      = float("inf")   # for early stopping
     no_improve         = 0
@@ -133,11 +135,12 @@ def train_network(task, config, run_dir, rdm_inputs, ds_train=None, ds_val=None,
                         save_activations_mlp(model, stimuli_t, run_dir / f"perf_{label}", device)
                         perf_crossed.add(label)
 
-        # Early stopping (by val_loss): track from epoch 1, stop only after MIN_EPOCHS
+        # Early stopping (by val_loss): patience only counts within PATIENCE epochs of MIN_EPOCHS,
+        # so exhausted patience never pre-decides a stop before MIN_EPOCHS is reached.
         if val_loss < best_val_loss * (1 - EARLY_STOP_THRESHOLD):
             best_val_loss = val_loss
             no_improve    = 0
-        else:
+        elif epoch + 1 > MIN_EPOCHS - EARLY_STOP_PATIENCE:
             no_improve += 1
         if epoch + 1 >= MIN_EPOCHS and no_improve >= EARLY_STOP_PATIENCE:
             break
@@ -159,15 +162,16 @@ def train_network(task, config, run_dir, rdm_inputs, ds_train=None, ds_val=None,
 
     # Persist metadata and history
     metadata = {
-        "task":         task.name,
-        "paradigm":     task.paradigm,
-        "config":       dict(config),
-        "best_epoch":   best_epoch,
-        "best_step":    best_step,
-        "best_metric":  round(float(best_model_metric), 6),
-        "final_epoch":  final_epoch,
-        "final_step":   global_step,
-        "final_metric": round(float(final_metric), 6),
+        "task":              task.name,
+        "paradigm":          task.paradigm,
+        "config":            dict(config),
+        "best_epoch":        best_epoch,
+        "best_step":         best_step,
+        "best_metric":       round(float(best_model_metric), 6),
+        "final_epoch":       final_epoch,
+        "final_step":        global_step,
+        "final_metric":      round(float(final_metric), 6),
+        "training_time_s":   round(time.time() - t0, 1),
     }
     if test_metric is not None:
         metadata["test_metric"] = test_metric

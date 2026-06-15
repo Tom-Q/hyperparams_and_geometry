@@ -24,21 +24,19 @@ def save_activations_mlp(model, stimuli_tensor, path, device):
     model.train()
 
 
-def save_activations_rnn(model, sequences_tensor, path, device, time_indices=None):
-    """Save per-time-step hidden states to path (npz compressed).
+def save_activations_rnn(model, sequences_tensor, path, device):
+    """Save per-layer, per-time-step hidden states to path (npz compressed).
 
     sequences_tensor : (N, T, input_size) float32
-    time_indices     : list of time steps to save; None = save all
-    Keys: t_0, t_5, … each (N, H)
+    Keys: layer_0_t_0, layer_0_t_1, …, layer_1_t_0, … each (N, H)
     """
     model.eval()
     with torch.no_grad():
-        step_acts = model.get_step_activations(sequences_tensor.to(device))
-    if time_indices is None:
-        time_indices = list(range(len(step_acts)))
+        layer_acts = model.get_step_activations(sequences_tensor.to(device))  # list of (N, T, H)
     payload = {
-        f"t_{t}": step_acts[t].cpu().numpy().astype(np.float32)
-        for t in time_indices if t < len(step_acts)
+        f"layer_{l}_t_{t}": acts[:, t, :].numpy().astype(np.float32)
+        for l, acts in enumerate(layer_acts)
+        for t in range(acts.shape[1])
     }
     np.savez_compressed(path, **payload)
     model.train()

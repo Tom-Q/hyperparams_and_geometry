@@ -12,8 +12,6 @@ N_TRAIN     = 10_000
 N_VAL       = 1_000
 N_STIMULI   = 100
 STIM_SEED   = 200   # fixed seed distinct from get_data seeds
-# Save hidden state at these time steps only (to limit storage)
-RDM_TIME_INDICES = [0, 2, 4, 9, 17, 24]   # 0-indexed: 6 evenly spaced steps out of 25
 
 
 def _generate_adding(n, seed):
@@ -43,7 +41,6 @@ class AddingTask(Task):
     chance_perf       = -0.1667  # negated MSE of naive predictor (always predict 1.0): Var[v1+v2] = 1/6
     max_metric        = 0.0      # negated MSE of perfect predictor
     metric_name       = "val_mse"
-    rdm_time_indices  = RDM_TIME_INDICES
 
     def get_data(self, data_dir="data", seed=42):
         x_train, y_train = _generate_adding(N_TRAIN, seed=seed)
@@ -53,9 +50,9 @@ class AddingTask(Task):
         return ds_train, ds_val
 
     def get_rdm_stimuli(self, data_dir="data", seed=42):
-        """100 fixed sequences; hidden state saved at a subset of time steps."""
+        """100 fixed sequences."""
         x, y = _generate_adding(N_STIMULI, seed=STIM_SEED)
-        return x, {"targets": y}   # shape: (100, 50, 2)
+        return x, {"targets": y}   # shape: (100, 25, 2)
 
     def categorical_space(self):
         return RNN_HYPERPARAMS

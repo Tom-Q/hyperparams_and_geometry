@@ -147,9 +147,10 @@ def train_network(task, config, run_dir, rdm_inputs, env_factory,
         "task":          task.name,
         "paradigm":      task.paradigm,
         "config":        dict(config),
-        "final_step":    global_step,
-        "final_rolling": round(final_rolling, 4),
-        "best_rolling":  round(best_rolling, 4),
+        "final_step":       global_step,
+        "final_rolling":    round(final_rolling, 4),
+        "best_rolling":     round(best_rolling, 4),
+        "training_time_s":  round(time.time() - t0, 1),
     }
 
     with open(run_dir / "metadata.json", "w") as f:

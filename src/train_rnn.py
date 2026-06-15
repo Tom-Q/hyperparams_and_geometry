@@ -66,7 +66,6 @@ def train_network(task, config, run_dir, rdm_inputs, ds_train=None, ds_val=None,
     criterion    = task.make_loss()
     l1_coef      = config["l1_reg"]
     rdm_tensor   = torch.tensor(rdm_inputs, dtype=torch.float32)
-    time_indices = task.rdm_time_indices
 
     steps_per_epoch   = math.ceil(len(ds_train) / batch_size)
     total_steps       = max_epochs * steps_per_epoch
@@ -109,12 +108,12 @@ def train_network(task, config, run_dir, rdm_inputs, ds_train=None, ds_val=None,
             if save_activations and global_step in checkpoint_steps:
                 save_activations_rnn(model, rdm_tensor,
                                      run_dir / f"step_{global_step:07d}",
-                                     device, time_indices=time_indices)
+                                     device)
             if save_activations and global_step in epoch_ckpt_steps:
                 label = format_epoch_label(epoch_ckpt_steps[global_step])
                 save_activations_rnn(model, rdm_tensor,
                                      run_dir / f"epoch_{label}",
-                                     device, time_indices=time_indices)
+                                     device)
 
         epoch_loss /= len(ds_train)
         val_loss, val_acc = _evaluate(model, val_loader, criterion, device, multiclass)
@@ -148,14 +147,15 @@ def train_network(task, config, run_dir, rdm_inputs, ds_train=None, ds_val=None,
                 for raw_t, label in perf_ckpts:
                     if label not in perf_crossed and perf_val >= raw_t:
                         save_activations_rnn(model, rdm_tensor, run_dir / f"perf_{label}",
-                                             device, time_indices=time_indices)
+                                             device)
                         perf_crossed.add(label)
 
-        # Early stopping (by val_loss): track from epoch 1, stop only after MIN_EPOCHS
+        # Early stopping (by val_loss): patience only counts within PATIENCE epochs of MIN_EPOCHS,
+        # so exhausted patience never pre-decides a stop before MIN_EPOCHS is reached.
         if val_loss < best_val_loss * (1 - EARLY_STOP_THRESHOLD):
             best_val_loss = val_loss
             no_improve    = 0
-        else:
+        elif epoch + 1 > MIN_EPOCHS - EARLY_STOP_PATIENCE:
             no_improve += 1
         if epoch + 1 >= MIN_EPOCHS and no_improve >= EARLY_STOP_PATIENCE:
             break
@@ -164,11 +164,9 @@ def train_network(task, config, run_dir, rdm_inputs, ds_train=None, ds_val=None,
     final_metric = val_loss if use_mse else val_acc
 
     if save_activations:
-        save_activations_rnn(model, rdm_tensor, run_dir / "final",
-                             device, time_indices=time_indices)
+        save_activations_rnn(model, rdm_tensor, run_dir / "final", device)
         model.load_state_dict(torch.load(run_dir / "model_best.pt", map_location=device))
-        save_activations_rnn(model, rdm_tensor, run_dir / "best",
-                             device, time_indices=time_indices)
+        save_activations_rnn(model, rdm_tensor, run_dir / "best", device)
 
     # Test-set evaluation using best weights (optional)
     test_metric = None
@@ -184,9 +182,10 @@ def train_network(task, config, run_dir, rdm_inputs, ds_train=None, ds_val=None,
         "best_epoch":   best_epoch,
         "best_step":    best_step,
         "best_metric":  round(float(best_model_metric), 6),
-        "final_epoch":  final_epoch,
-        "final_step":   global_step,
-        "final_metric": round(float(final_metric), 6),
+        "final_epoch":      final_epoch,
+        "final_step":       global_step,
+        "final_metric":     round(float(final_metric), 6),
+        "training_time_s":  round(time.time() - t0, 1),
     }
     if test_metric is not None:
         metadata["test_metric"] = test_metric

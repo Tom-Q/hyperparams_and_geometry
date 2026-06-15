@@ -57,6 +57,8 @@ def parse_args():
                    help="RL: episodes in rolling average (default: train_rl.ROLLING_N)")
     p.add_argument("--no-save-activations", action="store_true",
                    help="Skip saving activations and model checkpoints (for test runs)")
+    p.add_argument("--no-repeats", action="store_true",
+                   help="Disable repeat runs (all iterations are primaries)")
     return p.parse_args()
 
 
@@ -194,7 +196,7 @@ def main():
     for iteration in range(n_done, args.n_iter):
         print(f"\n{'='*60}")
 
-        repeat_config, repeat_of_idx = _pending_repeat(observations)
+        repeat_config, repeat_of_idx = (None, None) if args.no_repeats else _pending_repeat(observations)
 
         if repeat_config is not None:
             config         = repeat_config
