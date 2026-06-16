@@ -143,15 +143,31 @@ def _pending_repeat(observations):
 
 
 def _s3_sync(local_dir, s3_bucket, task_name):
-    """Upload bo_state.json to S3 via boto3. Network weights are not uploaded."""
-    state_file = Path(local_dir) / "bo_state.json"
-    if not state_file.exists():
+    """Sync the full experiment directory to S3, skipping already-uploaded files."""
+    local_dir = Path(local_dir)
+    if not local_dir.exists():
         return
     try:
         import boto3
-        boto3.client("s3").upload_file(
-            str(state_file), s3_bucket, f"{task_name}/bo_state.json"
-        )
+        client = boto3.client("s3")
+
+        # Build set of keys already on S3 so we skip unchanged files.
+        existing = set()
+        paginator = client.get_paginator("list_objects_v2")
+        for page in paginator.paginate(Bucket=s3_bucket, Prefix=f"{task_name}/"):
+            for obj in page.get("Contents", []):
+                existing.add(obj["Key"])
+
+        uploaded = 0
+        for local_path in sorted(local_dir.rglob("*")):
+            if not local_path.is_file():
+                continue
+            s3_key = f"{task_name}/{local_path.relative_to(local_dir)}"
+            if s3_key not in existing:
+                client.upload_file(str(local_path), s3_bucket, s3_key)
+                uploaded += 1
+
+        print(f"  [S3] synced {uploaded} new file(s) to s3://{s3_bucket}/{task_name}/")
     except Exception as e:
         print(f"  [S3 sync warning] {e}")
 

@@ -34,7 +34,7 @@ TASK_MAX_EPOCHS = {
     "fourrooms":     10_000,
 }
 
-N_ITER = 5
+N_ITER = 2
 
 
 def mlp_layer_sizes(hidden_size, depth):

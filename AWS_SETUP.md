@@ -30,6 +30,17 @@ Created from a past instance. Use as a starting point, updating User Data per ta
 
 ---
 
+## Running the smoke test
+
+Use `scripts/aws_smoke_test_userdata.sh` as User Data verbatim. It clones `main`,
+installs deps, runs all 9 tasks with small budgets, saves activations to S3, then
+self-terminates.
+
+**Before launching:** ensure S3 is clean (no existing task directories).
+**After the smoke test:** delete all S3 content again before the real run.
+
+---
+
 ## Launching a run
 
 ### 1. Upload existing state to S3 (if resuming)
