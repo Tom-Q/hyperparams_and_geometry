@@ -2,12 +2,13 @@
 set -e
 
 # ============================================================
-# PER-TASK SETTINGS — change these 3 lines before pasting
+# PER-TASK SETTINGS — change these lines before pasting
 # ============================================================
 TASK_NAME="spirals"       # mnist_dual | mnist_10way | fashion_10way | spirals | parity
                           # cartpole | fourrooms | adding | mnist_rnn
 N_ITER=1000               # 1000 for all tasks except mnist_rnn (200)
 H=0.162                   # supervised: 0.162 | RL: 0.116 | RNN: 0.147 | mnist_rnn: 0.218
+N_SOBOL=200               # default 200; set to 50 for mnist_rnn (so GP phase activates)
 # ============================================================
 
 S3_BUCKET="tom-hyperparams-representations"
@@ -48,6 +49,7 @@ export S3_BUCKET
 python run_bo.py \
     --task       "$TASK_NAME" \
     --n-iter     "$N_ITER" \
+    --n-sobol    "$N_SOBOL" \
     --output-dir output/experiments \
     --beta       "$BETA" \
     --h          "$H"
