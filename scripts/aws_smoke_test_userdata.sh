@@ -26,18 +26,4 @@ python scripts/aws_smoke_test.py \
     --data-dir data \
     2>&1 | tee /home/ubuntu/smoke_test.log
 
-# --- Self-terminate ---
-python3 - <<'EOF'
-import urllib.request, boto3
-token = urllib.request.urlopen(urllib.request.Request(
-    "http://169.254.169.254/latest/api/token", method="PUT",
-    headers={"X-aws-ec2-metadata-token-ttl-seconds": "21600"}
-)).read().decode()
-def imds(p):
-    return urllib.request.urlopen(urllib.request.Request(
-        f"http://169.254.169.254/latest/meta-data/{p}",
-        headers={"X-aws-ec2-metadata-token": token}
-    )).read().decode()
-boto3.client("ec2", region_name=imds("placement/region")).terminate_instances(
-    InstanceIds=[imds("instance-id")])
-EOF
+# NOTE: no self-terminate — SSH in to read smoke_test.log before shutting down manually.
