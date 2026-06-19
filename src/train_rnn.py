@@ -87,6 +87,9 @@ def train_network(task, config, run_dir, rdm_inputs, ds_train=None, ds_val=None,
     final_metric      = 0.0
     t0                = time.time()
 
+    # Save initial weights so model_best.pt always exists even if val_loss is NaN throughout.
+    torch.save(model.state_dict(), run_dir / "model_best.pt")
+
     for epoch in range(max_epochs):
         model.train()
         epoch_loss = 0.0
