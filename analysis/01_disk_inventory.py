@@ -107,23 +107,22 @@ def main():
         for f in flags:
             print(f)
 
-    # --- adding_failed_run reference -------------------------------------
+    # --- adding_failed_run (save to CSV too, keyed as "adding_failed_run") -----
     failed_dir = PRODUCTION_DIR.parent / "production" / ".."  # relative anchor
     failed_run = PRODUCTION_DIR / ".." / "production" / "adding_failed_run"
     failed_run = (PRODUCTION_DIR.parent / "production" / "adding_failed_run").resolve()
     # Reuse disk_inventory but point at adding_failed_run as if it were the task dir
     af_state = failed_run / "bo_state.json"
     if af_state.exists():
-        # Temporarily inject as a custom production_dir trick:
-        # disk_inventory looks for production_dir / task_name / bo_state.json
-        # so we pass production_dir = adding_failed_run.parent and task_name = "adding_failed_run"
         af_inv = disk_inventory("adding_failed_run", production_dir=failed_run.parent)
         af_row = summarise(af_inv, "adding_failed_run", production_dir=failed_run.parent)
         if af_row:
-            print("\n=== adding_failed_run (reference — do not use for analysis) ===\n")
+            # Append to CSV
             af_df = pd.DataFrame([af_row])
+            af_df.to_csv(TABLES_DIR / "disk_inventory.csv", mode="a", header=False, index=False)
+
+            print("\n=== adding_failed_run (reference) ===\n")
             print(af_df.to_string(index=False))
-            # Highlight the known-missing iterations
             missing_iters = af_inv[~af_inv["has_run_dir"]]["iteration"].tolist()
             if missing_iters:
                 print(f"\n  Missing run dirs (iterations): {missing_iters}")
