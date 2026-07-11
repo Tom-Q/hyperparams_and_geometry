@@ -10,3 +10,7 @@ rdm_stimuli.npz
 *.npz
 *.npy
 secrets/
+analysis/figures/
+analysis/tables/
+analysis/cache/
+analysis/rdms/

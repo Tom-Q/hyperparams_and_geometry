@@ -17,13 +17,22 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-REPO_ROOT  = Path(__file__).parent.parent
-ANALYSIS   = Path(__file__).parent
-CACHE_DIR  = ANALYSIS / "cache"
-TABLES_DIR = ANALYSIS / "tables"
-FIGURES_DIR = ANALYSIS / "figures"
+REPO_ROOT   = Path(__file__).parent.parent
+ANALYSIS    = Path(__file__).parent
+OUTPUT_DIR  = REPO_ROOT / "output"
 
-PRODUCTION_DIR = REPO_ROOT / "output" / "production"
+# Final training dataset (copy of production, frozen for analysis)
+DATASET_DIR = OUTPUT_DIR / "final_dataset"
+
+# Analysis outputs
+ANALYSIS_OUT = OUTPUT_DIR / "analysis"
+FIGURES_DIR  = ANALYSIS_OUT / "figures"
+TABLES_DIR   = ANALYSIS_OUT / "tables"
+CACHE_DIR    = ANALYSIS_OUT / "cache"
+RDM_DIR      = ANALYSIS_OUT / "rdms"
+
+# Backwards-compat alias — scripts still being migrated may import this
+PRODUCTION_DIR = DATASET_DIR
 
 sys.path.insert(0, str(REPO_ROOT))
 
