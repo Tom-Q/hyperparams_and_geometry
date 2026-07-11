@@ -3,9 +3,7 @@
 Step 1: Disk inventory.
 
 Compares bo_state.json entries against what is physically on disk for each task.
-Saves analysis/tables/disk_inventory.csv.
-
-For 'adding': the fresh retraining run is at output/production/adding/ (in progress).
+Saves output/analysis/tables/disk_inventory.csv.
 The old corrupted run is shown separately as adding_failed_run for reference.
 """
 
@@ -75,7 +73,7 @@ def main():
     TABLES_DIR.mkdir(parents=True, exist_ok=True)
 
     # --- Primary inventory (production/) ----------------------------------
-    print("Loading disk inventory from output/production/ ...")
+    print("Loading disk inventory from output/final_dataset/ ...")
     inv = disk_inventory_all()
 
     rows = []
@@ -89,7 +87,7 @@ def main():
     df = pd.DataFrame(rows)
     df.to_csv(TABLES_DIR / "disk_inventory.csv", index=False)
 
-    print("\n=== Disk inventory — output/production/ ===\n")
+    print("\n=== Disk inventory — output/final_dataset/ ===\n")
     print(df.to_string(index=False))
 
     # --- Flags ------------------------------------------------------------
@@ -108,10 +106,7 @@ def main():
             print(f)
 
     # --- adding_failed_run (save to CSV too, keyed as "adding_failed_run") -----
-    failed_dir = PRODUCTION_DIR.parent / "production" / ".."  # relative anchor
-    failed_run = PRODUCTION_DIR / ".." / "production" / "adding_failed_run"
-    failed_run = (PRODUCTION_DIR.parent / "production" / "adding_failed_run").resolve()
-    # Reuse disk_inventory but point at adding_failed_run as if it were the task dir
+    failed_run = PRODUCTION_DIR / "adding_failed_run"
     af_state = failed_run / "bo_state.json"
     if af_state.exists():
         af_inv = disk_inventory("adding_failed_run", production_dir=failed_run.parent)

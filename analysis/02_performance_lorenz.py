@@ -45,8 +45,8 @@ from analysis_utils import (
     task_meta,
 )
 
-ALPHAS  = [0.95, 0.90, 0.85, 0.80, 0.75]
-COLORS  = ["#1b7837", "#762a83", "#e08214", "#2166ac", "#d6604d"]
+ALPHAS  = [0.90]
+COLORS  = ["#2166ac"]
 EMP_MAX_PERCENTILE = 95   # use p95 as empirical ceiling to avoid outliers
 
 
