@@ -36,8 +36,9 @@ from analysis_utils import (
 )
 
 MODELS_DIR         = CACHE_DIR / "category_models"
-TASK_DIR_OVERRIDES = {"adding": "adding_failed_run"}
+TASK_DIR_OVERRIDES = {}
 RNN_TASKS          = {"adding", "mnist_rnn"}
+NAN_TASKS          = {"adding"}    # temporal RDMs contain fixed-position NaN entries
 
 # Tasks that show multiple models as overlapping series.
 # Each entry: list of (model_name, marker, color, legend_label) plotted back-to-front.
@@ -61,10 +62,21 @@ MULTI_MODEL = {
 PRIMARY_MODEL = {
     "mnist_10way":   "digit",
     "fashion_10way": "class",
-    "mnist_rnn":     "digit",
     "parity":        "parity_label",
     "cartpole":      "euclidean",
 }
+
+MULTI_MODEL["mnist_rnn"] = [
+    ("digit",        "o", "#2166ac", "digit (static)"),
+    ("digit_linear", "s", "#e05c00", "digit (linear growth)"),
+]
+
+MULTI_MODEL["adding"] = [
+    ("phase",  "o", "#888888", "phase"),
+    ("value1", "s", "#d6604d", "value 1"),
+    ("value2", "^", "#f4a261", "value 2"),
+    ("sum",    "D", "#2166ac", "sum"),
+]
 
 PERF_COLORS = {
     "successful":  "#2166ac",
@@ -121,21 +133,9 @@ def get_ckpt_name(task):
 
 
 def get_last_layer_key(ckpt_grp, task, depth):
+    """Key for the primary RDM in a checkpoint group."""
     if task in RNN_TASKS:
-        parsed = []
-        for k in ckpt_grp.keys():
-            if "_t_" not in k:
-                continue
-            parts = k.split("_")
-            try:
-                parsed.append((int(parts[1]), int(parts[3])))
-            except (IndexError, ValueError):
-                continue
-        if not parsed:
-            return None
-        max_l = max(p[0] for p in parsed)
-        max_t = max(p[1] for p in parsed if p[0] == max_l)
-        return f"layer_{max_l}_t_{max_t}"
+        return "temporal"
     return f"layer_{max(0, int(depth) - 1)}"
 
 
@@ -166,6 +166,17 @@ def load_all_primary_rdms(task):
             if ds is None or ds.attrs.get("degenerate", False) or len(ds) == 0:
                 continue
             results.append((run_id, perf, ds[:].astype(np.float32)))
+
+    # Strip fixed-position NaN for NAN_TASKS; raise on unexpected NaN elsewhere
+    if task in NAN_TASKS and results:
+        _, _, sample = results[0]
+        valid   = np.isfinite(sample)
+        results = [(rid, perf, rdm[valid]) for rid, perf, rdm in results]
+    elif results:
+        for rid, perf, rdm in results:
+            if not np.all(np.isfinite(rdm)):
+                raise ValueError(f"{task}/{rid}: unexpected NaN in RDM")
+
     return results
 
 
@@ -184,6 +195,67 @@ def load_cat_vec(task, model_name):
     n = D.shape[0]
     rows, cols = np.triu_indices(n, k=1)
     return D[rows, cols].astype(np.float32)
+
+
+def load_temporal_cat_vecs(task, cat_models):
+    """
+    Expand N_stim×N_stim category models to match the temporal RDM format.
+
+    Entry for pair (row_k, row_l) uses D_stim[stim_k, stim_l], so category
+    structure depends only on stimulus identity, not on phase/timestep.
+    For NAN_TASKS (adding): strips pairs where either row has no valid timesteps,
+    matching the stripping applied in load_all_primary_rdms.
+    """
+    h5_path = RDM_DIR / f"{task}_rdms.h5"
+    with h5py.File(h5_path, "r") as h5:
+        row_stim   = h5["meta/temporal_row_stim"][:]
+        valid_mask = (h5["meta/temporal_valid_mask"][:].astype(bool)
+                      if "temporal_valid_mask" in h5["meta"] else None)
+
+    N_rows = len(row_stim)
+    ri, ci = np.triu_indices(N_rows, k=1)
+    pair_valid = (valid_mask[ri] & valid_mask[ci]) if valid_mask is not None else None
+
+    result = {}
+    for name, D in cat_models.items():
+        D_temp = D[np.ix_(row_stim, row_stim)]
+        vec    = D_temp[ri, ci].astype(np.float32)
+        if pair_valid is not None:
+            vec = vec[pair_valid]
+        result[name] = vec
+    return result
+
+
+def load_adding_temporal_cat_vecs():
+    """
+    Load pre-built 600×600 adding temporal category models (from 12b) and strip
+    NaN pairs, matching what load_all_primary_rdms does for adding RDMs.
+    Returns dict of name → float32 vector (valid upper-triangle pairs only).
+    """
+    npz_path = MODELS_DIR / "adding_temporal.npz"
+    if not npz_path.exists():
+        return {}
+    data = np.load(npz_path)
+    with h5py.File(RDM_DIR / "adding_rdms.h5", "r") as h5:
+        valid_mask = h5["meta/temporal_valid_mask"][:].astype(bool)
+    ri, ci     = np.triu_indices(600, k=1)
+    pair_valid = valid_mask[ri] & valid_mask[ci]
+    return {name: data[name][ri, ci][pair_valid].astype(np.float32)
+            for name in data.files}
+
+
+def load_mnist_rnn_temporal_cat_vecs():
+    """
+    Load pre-built 1400×1400 mnist_rnn temporal category models (from 12c).
+    No NaN stripping needed — every (stim, timestep) pair is valid.
+    Returns dict of name → float32 vector (979,300 entries).
+    """
+    npz_path = MODELS_DIR / "mnist_rnn_temporal.npz"
+    if not npz_path.exists():
+        return {}
+    data = np.load(npz_path)
+    ri, ci = np.triu_indices(1400, k=1)
+    return {name: data[name][ri, ci].astype(np.float32) for name in data.files}
 
 
 # ---------------------------------------------------------------------------
@@ -219,7 +291,8 @@ def plot_task(ax, task, rows_df, thresholds, meta):
 
     ax.axhline(0, color="grey", lw=0.6, ls="--")
     ax.axvline(1, color="grey", lw=0.8, ls=":")   # success threshold
-    ax.set_xlim(left=min(rows_df["norm_perf"].min() - 0.05, -0.1))
+    finite_perf = rows_df["norm_perf"][np.isfinite(rows_df["norm_perf"])]
+    ax.set_xlim(left=min(finite_perf.min() - 0.05, -0.1) if len(finite_perf) else -0.1)
     ax.set_ylim(-0.15, 1.05)
     ax.set_xlabel("norm. performance", fontsize=7)
     ax.set_ylabel("Spearman r (cat. model)", fontsize=7)
@@ -523,18 +596,31 @@ def main():
     for task in tasks_with_models:
         print(f"  {task} ...", end="", flush=True)
 
-        npz_path = MODELS_DIR / f"{task}.npz"
-        if not npz_path.exists():
-            print(" [no category model]")
-            continue
-
-        cat_models = dict(np.load(npz_path))   # name → N×N
-        # Convert to upper-triangle vectors
-        cat_vecs = {}
-        for name, D in cat_models.items():
-            n = D.shape[0]
-            rows_idx, cols_idx = np.triu_indices(n, k=1)
-            cat_vecs[name] = D[rows_idx, cols_idx].astype(np.float32)
+        # Load category model vectors matched to the network RDM format
+        if task == "adding":
+            cat_vecs = load_adding_temporal_cat_vecs()
+            if not cat_vecs:
+                print(" [no adding_temporal.npz — run 12b first]")
+                continue
+        elif task == "mnist_rnn":
+            cat_vecs = load_mnist_rnn_temporal_cat_vecs()
+            if not cat_vecs:
+                print(" [no mnist_rnn_temporal.npz — run 12c first]")
+                continue
+        else:
+            npz_path = MODELS_DIR / f"{task}.npz"
+            if not npz_path.exists():
+                print(" [no category model]")
+                continue
+            cat_models = dict(np.load(npz_path))   # name → N×N
+            if task in RNN_TASKS:
+                cat_vecs = load_temporal_cat_vecs(task, cat_models)
+            else:
+                cat_vecs = {}
+                for name, D in cat_models.items():
+                    n = D.shape[0]
+                    rows_idx, cols_idx = np.triu_indices(n, k=1)
+                    cat_vecs[name] = D[rows_idx, cols_idx].astype(np.float32)
 
         rdm_entries = load_all_primary_rdms(task)
         if not rdm_entries:

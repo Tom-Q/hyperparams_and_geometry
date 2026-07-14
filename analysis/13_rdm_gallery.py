@@ -28,7 +28,7 @@ from analysis_utils import (
 from plot_utils import plot_rdm, vec_to_rdm
 
 MODELS_DIR  = CACHE_DIR / "category_models"
-TASK_DIR_OVERRIDES = {"adding": "adding_failed_run"}
+TASK_DIR_OVERRIDES = {}
 RNN_TASKS   = {"adding", "mnist_rnn"}
 N_EXAMPLES  = 6
 RNG_SEED    = 0

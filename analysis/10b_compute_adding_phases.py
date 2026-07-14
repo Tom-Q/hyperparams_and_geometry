@@ -1,25 +1,39 @@
 #!/usr/bin/env python3
 """
-Step 10b: Semantic phase-aligned RDMs for the Adding task.
+Step 10b: Phase-averaged temporal RDM for the Adding task.
 
-The 100 fixed stimuli each have exactly 2 flagged time steps (positions vary
-per stimulus). This script computes one activation matrix per phase by
-averaging (or selecting) the relevant time steps, then storing a cosine-
-distance RDM for each phase.
+Produces a single RDM per network where each row/col is a (stimulus, phase)
+pair: 100 stimuli × 6 phases = 600 rows, ordered stimulus-major:
+(stim_0, phase_0), ..., (stim_0, phase_5), (stim_1, phase_0), ...
 
-Six phases:
-  phase_1  before flag 1      mean of t < flag1
-  phase_2  at flag 1          t = flag1  (single step, per-stimulus)
-  phase_3  between flags      mean of flag1 < t < flag2
-  phase_4  at flag 2          t = flag2  (single step, per-stimulus)
-  phase_5  after flag 2       mean of flag2 < t < 24
-  phase_6  final step         t = 24  (same for all stimuli)
+Entry for pair [(stim_i, phase_p), (stim_j, phase_q)] = average cosine
+distance over all cross-timestep pairs (t_a in V_i[p], t_b in V_j[q]):
 
-Phases 1, 3, 5 may be empty for some stimuli. Those stimuli are excluded
-and a boolean validity mask (N_PHASES × 100) is stored in meta/phase_masks.
-Phase RDMs therefore have variable length n_valid*(n_valid-1)//2.
+    avg_dist = 1 - m_i[p] · m_j[q]
 
-Appends layer_N_phase_K keys to existing adding_rdms.h5.
+where m_i[p] = mean of unit(h_i[t]) over valid timesteps t in phase p.
+The full RDM is 1 - M @ M.T for the (600, H) matrix M of mean unit vectors.
+
+WARNING — cosine distance only: this factoring does NOT hold for Euclidean,
+Mahalanobis, or any other metric. For a different metric, build the full
+(N_STIM×T)×(N_STIM×T) pairwise distance matrix and average within groups
+explicitly (cf. reference_code_rdm.py:average_values).
+
+Phases (0-indexed):
+  0  before flag1       t < flag1         NaN where flag1 == 0
+  1  at flag1           t = flag1
+  2  between flags      flag1 < t < flag2 NaN where flags adjacent
+  3  at flag2           t = flag2
+  4  after flag2        flag2 < t < T-1   NaN where flag2 >= T-2
+  5  final step         t = T-1
+
+Rows where a stimulus has no valid timesteps in a phase are NaN. The NaN
+mask is fixed across all networks (depends only on the fixed stimulus set)
+and stored in meta/temporal_valid_mask. Use nan_policy='omit' downstream
+for adding only; NaN in any other task indicates a bug.
+
+Stored as key "temporal" in each run/checkpoint group of adding_rdms.h5.
+Row metadata stored once in meta/.
 
 Usage:
   python 10b_compute_adding_phases.py
@@ -32,38 +46,34 @@ from pathlib import Path
 
 import h5py
 import numpy as np
-from sklearn.metrics.pairwise import cosine_distances
 
-ANALYSIS = Path(__file__).parent
+ANALYSIS    = Path(__file__).parent
 sys.path.insert(0, str(ANALYSIS))
 from analysis_utils import DATASET_DIR, RDM_DIR
 
-ADDING_DIR  = DATASET_DIR / "adding_failed_run"
+ADDING_DIR  = DATASET_DIR / "adding"
 ADDING_H5   = RDM_DIR / "adding_rdms.h5"
 T           = 25
 N_STIM      = 100
 N_PHASES    = 6
+N_ROWS      = N_STIM * N_PHASES   # 600
 
-PHASE_NAMES = [
-    "phase_1", "phase_2", "phase_3",
-    "phase_4", "phase_5", "phase_6",
-]
 PHASE_DESCS = [
-    "before flag1 (mean t < flag1)",
-    "at flag1 (t = flag1)",
-    "between flags (mean flag1 < t < flag2)",
-    "at flag2 (t = flag2)",
-    "after flag2 (mean flag2 < t < 24)",
-    "final step (t = 24)",
+    "before flag1 (t < flag1; NaN where flag1 == 0)",
+    "at flag1",
+    "between flags (flag1 < t < flag2; NaN where adjacent)",
+    "at flag2",
+    "after flag2 (flag2 < t < T-1; NaN where flag2 >= T-2)",
+    "final step (t = T-1)",
 ]
 
 
 # ---------------------------------------------------------------------------
-# Stimulus flag positions
+# Stimulus metadata
 # ---------------------------------------------------------------------------
 
 def get_flag_positions():
-    """Return (100, 2) int array of sorted flag positions per stimulus."""
+    """Return (N_STIM, 2) int32 array of flag timestep positions."""
     sys.path.insert(0, str(ANALYSIS.parent))
     from tasks import TASKS
     task = TASKS["adding"]()
@@ -73,97 +83,96 @@ def get_flag_positions():
         flagged = np.where(inputs[i, :, 1] > 0.5)[0]
         assert len(flagged) == 2, f"stimulus {i}: expected 2 flags, got {len(flagged)}"
         pos.append(sorted(flagged.tolist()))
-    return np.array(pos, dtype=np.int32)   # (100, 2)
+    return np.array(pos, dtype=np.int32)
 
 
-def compute_phase_masks(flag_pos):
-    """Boolean (6, 100): True when stimulus has ≥1 time step in phase."""
+def temporal_meta(flag_pos):
+    """
+    Row labels and valid mask for the 600-row temporal RDM.
+    Returns row_stim (600,), row_phase (600,), valid_mask (600,).
+    """
+    row_stim  = np.repeat(np.arange(N_STIM,  dtype=np.int32), N_PHASES)
+    row_phase = np.tile(  np.arange(N_PHASES, dtype=np.int32), N_STIM)
     f1, f2 = flag_pos[:, 0], flag_pos[:, 1]
-    masks = np.zeros((N_PHASES, N_STIM), dtype=bool)
-    masks[0] = f1 > 0               # phase 1: at least one t before flag1
-    masks[1] = True                  # phase 2: always (single step)
-    masks[2] = f2 > f1 + 1          # phase 3: at least one t strictly between flags
-    masks[3] = True                  # phase 4: always (single step)
-    masks[4] = f2 < T - 2            # phase 5: at least one t in (flag2, 24)
-    masks[5] = True                  # phase 6: always (t = 24)
-    return masks
+    phase_valid = np.zeros((N_PHASES, N_STIM), dtype=bool)
+    phase_valid[0] = f1 > 0
+    phase_valid[1] = True
+    phase_valid[2] = f2 > f1 + 1
+    phase_valid[3] = True
+    phase_valid[4] = f2 < T - 2
+    phase_valid[5] = True
+    valid_mask = phase_valid[row_phase, row_stim]
+    return row_stim, row_phase, valid_mask
 
 
 # ---------------------------------------------------------------------------
-# Phase activation extraction
+# Core computation
 # ---------------------------------------------------------------------------
 
-def phase_activations(acts_by_t, flag_pos, phase_masks):
+def _unit_norm(mat):
+    """Row-normalise to unit vectors; near-zero rows stay near-zero."""
+    norms = np.linalg.norm(mat, axis=1, keepdims=True)
+    return mat / np.where(norms > 1e-8, norms, 1.0)
+
+
+def build_temporal_matrix(acts_by_t, flag_pos):
     """
-    For each of the 6 phases, compute one activation vector per valid stimulus.
+    Build (N_ROWS, H) = (600, H) matrix M of phase mean unit vectors.
 
-    acts_by_t  : dict  t -> (100, H)  float32
-    flag_pos   : (100, 2) int
-    phase_masks: (6, 100) bool
+    M[i * N_PHASES + p] = mean of unit(h_i[t]) over t valid for phase p.
+    Rows where stimulus i has no valid timesteps in phase p are NaN.
 
-    Returns list of 6 arrays, each (n_valid, H), or None if n_valid < 2.
+    WARNING — cosine distance only: RDM = 1 - M @ M.T.
+    Does not generalise to other metrics.
     """
     f1, f2 = flag_pos[:, 0], flag_pos[:, 1]
-    H = acts_by_t[0].shape[1]
-    result = []
+    H  = acts_by_t[0].shape[1]
+    M  = np.full((N_ROWS, H), np.nan, dtype=np.float64)
 
-    def _mean_phase(t_mask_fn):
-        """Average acts over time steps where t_mask_fn(t, stimulus) is True."""
+    def _mean_unit(valid_fn):
         acc = np.zeros((N_STIM, H), dtype=np.float64)
-        cnt = np.zeros(N_STIM, dtype=np.int32)
+        cnt = np.zeros(N_STIM,      dtype=np.int32)
         for t in range(T):
-            ok = t_mask_fn(t)    # (100,) bool
-            acc[ok] += acts_by_t[t][ok]
+            ok = valid_fn(t)
+            if not ok.any():
+                continue
+            acc[ok] += _unit_norm(acts_by_t[t].astype(np.float64))[ok]
             cnt[ok] += 1
+        out = np.full((N_STIM, H), np.nan, dtype=np.float64)
         valid = cnt > 0
-        out = np.zeros((N_STIM, H), dtype=np.float32)
-        out[valid] = (acc[valid] / cnt[valid, None]).astype(np.float32)
+        out[valid] = acc[valid] / cnt[valid, None]
         return out
 
-    # Phase 1 — before flag1
-    mask1 = phase_masks[0]
-    a1 = _mean_phase(lambda t: t < f1)
-    result.append(a1[mask1] if mask1.sum() >= 2 else None)
+    def _single_step(t_per_stim):
+        mat = np.stack([acts_by_t[t_per_stim[i]][i]
+                        for i in range(N_STIM)]).astype(np.float64)
+        return _unit_norm(mat)
 
-    # Phase 2 — at flag1
-    a2 = np.stack([acts_by_t[f1[i]][i] for i in range(N_STIM)]).astype(np.float32)
-    result.append(a2)
+    M[0::N_PHASES] = _mean_unit(lambda t: t < f1)
+    M[1::N_PHASES] = _single_step(f1)
+    M[2::N_PHASES] = _mean_unit(lambda t: (t > f1) & (t < f2))
+    M[3::N_PHASES] = _single_step(f2)
+    M[4::N_PHASES] = _mean_unit(lambda t: (t > f2) & (t < T - 1))
+    M[5::N_PHASES] = _unit_norm(acts_by_t[T - 1].astype(np.float64))
 
-    # Phase 3 — between flags
-    mask3 = phase_masks[2]
-    a3 = _mean_phase(lambda t: (t > f1) & (t < f2))
-    result.append(a3[mask3] if mask3.sum() >= 2 else None)
-
-    # Phase 4 — at flag2
-    a4 = np.stack([acts_by_t[f2[i]][i] for i in range(N_STIM)]).astype(np.float32)
-    result.append(a4)
-
-    # Phase 5 — after flag2
-    mask5 = phase_masks[4]
-    a5 = _mean_phase(lambda t: (t > f2) & (t < T - 1))
-    result.append(a5[mask5] if mask5.sum() >= 2 else None)
-
-    # Phase 6 — final step
-    result.append(acts_by_t[T - 1].astype(np.float32))
-
-    return result
+    return M.astype(np.float32)
 
 
-# ---------------------------------------------------------------------------
-# RDM computation
-# ---------------------------------------------------------------------------
-
-def compute_rdm(activations):
-    """Cosine-distance upper triangle. Returns None if degenerate."""
-    if np.any(~np.isfinite(activations)):
+def compute_temporal_rdm(M):
+    """
+    Upper-triangle of 1 - M @ M.T.
+    NaN rows in M produce NaN entries (propagates through matrix multiply).
+    Returns None if no valid (non-NaN) entries exist at all.
+    """
+    Md   = M.astype(np.float64)
+    gram = Md @ Md.T
+    if not np.any(np.isfinite(gram)):
         return None
-    norms = np.linalg.norm(activations, axis=1)
-    if np.any(norms < 1e-8):
-        return None
-    dist = cosine_distances(activations.astype(np.float32))
-    n = dist.shape[0]
-    rows, cols = np.triu_indices(n, k=1)
-    return dist[rows, cols].astype(np.float32)
+    D = 1.0 - gram
+    finite = np.isfinite(D)
+    D[finite] = np.clip(D[finite], 0.0, 2.0)
+    rows, cols = np.triu_indices(N_ROWS, k=1)
+    return D[rows, cols].astype(np.float32)
 
 
 # ---------------------------------------------------------------------------
@@ -176,45 +185,61 @@ def main():
     args = parser.parse_args()
 
     if not ADDING_H5.exists():
-        raise FileNotFoundError(f"adding_rdms.h5 not found at {ADDING_H5}. Run 10_compute_rdms.py first.")
+        raise FileNotFoundError(
+            f"adding_rdms.h5 not found at {ADDING_H5}. Run 10_compute_rdms.py first.")
 
-    print("Loading flag positions from fixed stimuli ...")
+    print("Loading flag positions ...")
     flag_pos = get_flag_positions()
-    f1, f2 = flag_pos[:, 0], flag_pos[:, 1]
-    phase_masks = compute_phase_masks(flag_pos)
+    row_stim, row_phase, valid_mask = temporal_meta(flag_pos)
 
-    print("Phase validity across 100 stimuli:")
-    for k, (name, desc) in enumerate(zip(PHASE_NAMES, PHASE_DESCS)):
-        n = phase_masks[k].sum()
-        print(f"  {name}: {n}/100 valid  ({desc})")
+    n_pairs = N_ROWS * (N_ROWS - 1) // 2
+    print(f"Temporal RDM: {N_ROWS} rows ({N_STIM} stimuli × {N_PHASES} phases)")
+    print(f"  {valid_mask.sum()}/{N_ROWS} rows valid  "
+          f"({(~valid_mask).sum()} NaN rows fixed across all networks)")
+    print(f"  Upper triangle: {n_pairs:,} pairs  (~{n_pairs * 4 / 1e6:.1f} MB per network uncompressed)")
+    for p in range(N_PHASES):
+        n = valid_mask[row_phase == p].sum()
+        print(f"  Phase {p}: {n}/{N_STIM} valid — {PHASE_DESCS[p]}")
 
     with h5py.File(ADDING_H5, "a") as h5:
-        # Store masks in meta
-        meta = h5["meta"]
-        for key in ("phase_masks", "phase_n_valid"):
+        meta = h5.require_group("meta")
+
+        # Row metadata — fixed across all networks, written once
+        for key in ("temporal_row_stim", "temporal_row_phase",
+                    "temporal_valid_mask", "temporal_phase_descs"):
             if key in meta:
                 del meta[key]
-        meta.create_dataset("phase_masks",   data=phase_masks.astype(np.uint8))
-        meta.create_dataset("phase_n_valid", data=phase_masks.sum(axis=1).astype(np.int32))
+        meta.create_dataset("temporal_row_stim",   data=row_stim)
+        meta.create_dataset("temporal_row_phase",  data=row_phase)
+        meta.create_dataset("temporal_valid_mask", data=valid_mask.astype(np.uint8))
+        meta.create_dataset("temporal_phase_descs",
+                            data=np.array(PHASE_DESCS, dtype=h5py.special_dtype(vlen=str)))
+        meta.attrs["temporal_n_rows"]  = N_ROWS
+        meta.attrs["temporal_n_pairs"] = n_pairs
 
         runs_grp = h5.get("runs")
         if runs_grp is None:
             raise RuntimeError("No 'runs' group in adding_rdms.h5.")
 
-        run_ids  = sorted(runs_grp.keys())
-        n_total  = len(run_ids)
+        run_ids    = sorted(runs_grp.keys())
+        n_total    = len(run_ids)
         n_computed = 0
+        n_skipped  = 0
+        n_degen    = 0
 
         for idx, run_id in enumerate(run_ids):
-            run_grp = runs_grp[run_id]
-            run_dir = ADDING_DIR / run_id
+            run_grp    = runs_grp[run_id]
+            run_dir    = ADDING_DIR / run_id
             ckpt_files = sorted(run_dir.glob("*.npz")) if run_dir.exists() else []
 
             for ckpt_path in ckpt_files:
                 ckpt_name = ckpt_path.stem
                 ckpt_grp  = run_grp.require_group(ckpt_name)
 
-                # Discover layers in this npz
+                if "temporal" in ckpt_grp and not args.overwrite:
+                    n_skipped += 1
+                    continue
+
                 try:
                     npz = np.load(ckpt_path)
                 except Exception as e:
@@ -225,63 +250,47 @@ def main():
                     int(k.split("_t_")[0].split("layer_")[1])
                     for k in npz.keys() if "_t_" in k
                 ))
+                if not layers:
+                    continue
+                L = layers[-1]
 
-                for layer in layers:
-                    # Skip if all phases already computed and not overwriting
-                    if not args.overwrite:
-                        all_done = all(
-                            f"layer_{layer}_{p}" in ckpt_grp
-                            for p in PHASE_NAMES
-                        )
-                        if all_done:
-                            continue
+                acts_by_t = {}
+                missing = False
+                for t in range(T):
+                    key = f"layer_{L}_t_{t}"
+                    if key not in npz:
+                        missing = True
+                        break
+                    acts_by_t[t] = npz[key].astype(np.float32)
+                if missing:
+                    continue
 
-                    # Load all T time steps for this layer
-                    acts_by_t = {}
-                    missing = False
-                    for t in range(T):
-                        key = f"layer_{layer}_t_{t}"
-                        if key not in npz:
-                            missing = True
-                            break
-                        acts_by_t[t] = npz[key].astype(np.float32)
-                    if missing:
-                        continue
+                M   = build_temporal_matrix(acts_by_t, flag_pos)
+                rdm = compute_temporal_rdm(M)
 
-                    phase_acts = phase_activations(acts_by_t, flag_pos, phase_masks)
+                if "temporal" in ckpt_grp:
+                    del ckpt_grp["temporal"]
 
-                    for k, (pname, acts) in enumerate(zip(PHASE_NAMES, phase_acts)):
-                        hdf5_key = f"layer_{layer}_{pname}"
-                        if hdf5_key in ckpt_grp:
-                            if args.overwrite:
-                                del ckpt_grp[hdf5_key]
-                            else:
-                                continue
+                if rdm is None:
+                    ds = ckpt_grp.create_dataset(
+                        "temporal", data=np.array([], dtype=np.float32))
+                    ds.attrs["degenerate"] = True
+                    n_degen += 1
+                    continue
 
-                        if acts is None:
-                            ds = ckpt_grp.create_dataset(
-                                hdf5_key, data=np.array([], dtype=np.float32))
-                            ds.attrs["degenerate"] = True
-                            ds.attrs["reason"] = "insufficient_valid_stimuli"
-                            continue
-
-                        rdm = compute_rdm(acts)
-                        if rdm is None:
-                            ds = ckpt_grp.create_dataset(
-                                hdf5_key, data=np.array([], dtype=np.float32))
-                            ds.attrs["degenerate"] = True
-                            continue
-
-                        ckpt_grp.create_dataset(
-                            hdf5_key, data=rdm,
-                            compression="gzip", compression_opts=4, shuffle=True)
-                        n_computed += 1
+                ckpt_grp.create_dataset(
+                    "temporal", data=rdm,
+                    compression="gzip", compression_opts=4, shuffle=True)
+                n_computed += 1
 
             if (idx + 1) % 100 == 0:
-                print(f"  {idx + 1}/{n_total} runs processed ...")
+                print(f"  {idx + 1}/{n_total} runs processed ...", flush=True)
 
-        print(f"\n  {n_computed} phase RDMs computed.")
-        print(f"  Stored in: {ADDING_H5}")
+    print(f"\n  {n_computed} temporal RDMs computed")
+    print(f"  {n_skipped} skipped (already present)")
+    if n_degen:
+        print(f"  {n_degen} degenerate (no valid entries)")
+    print(f"  Stored in: {ADDING_H5}")
 
 
 if __name__ == "__main__":

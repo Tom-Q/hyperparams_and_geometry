@@ -39,7 +39,7 @@ from analysis_utils import (
     DATASET_DIR, FIGURES_DIR, RDM_DIR, TABLES_DIR, TASK_NAMES, RL_TASKS, task_meta,
 )
 
-TASK_DIR_OVERRIDES = {"adding": "adding_failed_run"}
+TASK_DIR_OVERRIDES = {}
 RNN_TASKS          = {"adding", "mnist_rnn"}
 
 TASK_LABELS = {

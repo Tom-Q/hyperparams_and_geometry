@@ -37,10 +37,11 @@ from analysis_utils import (
     DATASET_DIR, FIGURES_DIR, RDM_DIR, TABLES_DIR, TASK_NAMES, RL_TASKS,
 )
 
-TASK_DIR_OVERRIDES = {"adding": "adding_failed_run"}
+TASK_DIR_OVERRIDES = {}
 RNN_TASKS = {"adding", "mnist_rnn"}
+NAN_TASKS = {"adding"}    # temporal RDMs contain fixed-position NaN entries
 N_BETWEEN = 2000   # between-config pairs to sample for 1.2
-RNG_SEED = 42
+RNG_SEED  = 42
 
 TASK_LABELS = {
     "mnist_dual":    "MNIST dual",
@@ -79,26 +80,10 @@ def get_ckpt_name(task):
 
 
 def get_last_layer_key(ckpt_grp, task, depth):
-    """Key for the last hidden layer in a checkpoint group."""
+    """Key for the primary RDM in a checkpoint group."""
     if task in RNN_TASKS:
-        parsed = []
-        for k in ckpt_grp.keys():
-            if "_t_" not in k:
-                continue
-            parts = k.split("_")
-            try:
-                l_idx = int(parts[1])
-                t_idx = int(parts[3])
-                parsed.append((l_idx, t_idx, k))
-            except (IndexError, ValueError):
-                continue
-        if not parsed:
-            return None
-        max_l = max(p[0] for p in parsed)
-        max_t = max(p[1] for p in parsed if p[0] == max_l)
-        return f"layer_{max_l}_t_{max_t}"
-    else:
-        return f"layer_{max(0, int(depth) - 1)}"
+        return "temporal"
+    return f"layer_{max(0, int(depth) - 1)}"
 
 
 def load_rdm_vec(ckpt_grp, key):
@@ -168,6 +153,18 @@ def load_task(task, success_threshold=None):
 
     print(f" {len(all_rdms)} RDMs loaded")
 
+    # Strip fixed-position NaN for NAN_TASKS (adding); raise on unexpected NaN elsewhere.
+    # Adding's NaN mask is identical across all networks — strip once using the first network.
+    if task in NAN_TASKS and all_rdms:
+        sample = next(iter(all_rdms.values()))
+        valid  = np.isfinite(sample)
+        all_rdms = {rid: rdm[valid] for rid, rdm in all_rdms.items()}
+    elif all_rdms:
+        for rid, rdm in all_rdms.items():
+            if not np.all(np.isfinite(rdm)):
+                raise ValueError(
+                    f"{task}/{rid}: unexpected NaN in RDM — bug in compute script")
+
     all_primary = {rid: rdm for rid, rdm in all_rdms.items()
                    if not run_is_repeat.get(rid, False)}
 
@@ -207,12 +204,14 @@ def noise_ceiling_loo(rdm_matrix):
     N = len(rdm_matrix)
     if N < 3:
         return np.full(N, np.nan)
-    rdm_f = rdm_matrix.astype(np.float64)
-    group_sum = rdm_f.sum(axis=0)
+    rdm_f32 = np.asarray(rdm_matrix, dtype=np.float32)
+    # Sum in float64 without materialising the full N×D float64 matrix
+    group_sum = rdm_f32.sum(axis=0, dtype=np.float64)
     results = np.zeros(N)
     for i in range(N):
-        loo_mean = (group_sum - rdm_f[i]) / (N - 1)
-        r, _ = spearmanr(rdm_f[i], loo_mean)
+        vec_i    = rdm_f32[i].astype(np.float64)
+        loo_mean = (group_sum - vec_i) / (N - 1)
+        r, _     = spearmanr(vec_i, loo_mean)
         results[i] = r
     return results
 
@@ -233,19 +232,20 @@ def rank_normalize_rows(mat):
 def between_config_corrs(all_primary, n_pairs, rng):
     """
     Sample n_pairs random distinct pairs from all_primary and return their
-    Spearman correlations (vectorized via rank-normalized dot product).
+    Spearman correlations. Uses pairwise spearmanr to avoid an N×D float64
+    rank matrix (which would OOM for large temporal RDMs).
     """
     rdm_list = list(all_primary.values())
     N = len(rdm_list)
     if N < 2:
         return np.array([])
-    rn = rank_normalize_rows(np.array(rdm_list))
     actual = min(n_pairs, N * (N - 1) // 2)
     ia = rng.integers(0, N, actual)
     ib = rng.integers(0, N, actual)
     same = ia == ib
     ib[same] = (ib[same] + 1) % N
-    return (rn[ia] * rn[ib]).sum(axis=1)
+    return np.array([spearmanr(rdm_list[a], rdm_list[b])[0]
+                     for a, b in zip(ia, ib)], dtype=np.float64)
 
 
 # ---------------------------------------------------------------------------

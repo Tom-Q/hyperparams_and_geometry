@@ -35,7 +35,7 @@ from analysis_utils import (
     DATASET_DIR, FIGURES_DIR, RDM_DIR, TABLES_DIR,
 )
 
-TASK_DIR_OVERRIDES = {"adding": "adding_failed_run"}
+TASK_DIR_OVERRIDES = {}
 N_BETWEEN = 2000
 RNG_SEED  = 42
 

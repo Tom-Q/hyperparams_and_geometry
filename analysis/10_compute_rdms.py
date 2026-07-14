@@ -38,10 +38,7 @@ ANALYSIS = Path(__file__).parent
 sys.path.insert(0, str(ANALYSIS))
 from analysis_utils import DATASET_DIR, RDM_DIR, TASK_NAMES, task_meta
 
-# adding uses adding_failed_run until the fresh run completes
-TASK_DIR_OVERRIDES = {
-    "adding": "adding_failed_run",
-}
+TASK_DIR_OVERRIDES = {}
 
 # activation vectors with norm below this are considered degenerate
 ZERO_NORM_THRESHOLD = 1e-8
@@ -145,8 +142,8 @@ def process_task(task: str, overwrite: bool):
             run_meta = json.load(open(meta_path))
             run_grp = h5.require_group(f"runs/{run_id}")
 
-            # Write run-level attrs on first visit
-            if "iteration" not in run_grp.attrs:
+            # Write run-level attrs on first visit, or whenever overwriting
+            if "iteration" not in run_grp.attrs or overwrite:
                 write_run_attrs(run_grp, iteration, bo_entry, run_meta)
 
             ckpt_files = sorted(run_dir.glob("*.npz"))

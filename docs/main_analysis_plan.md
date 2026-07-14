@@ -4,12 +4,25 @@
 
 ### RDM computation
 For each network and each checkpoint, compute the Representational Dissimilarity Matrix over the fixed stimulus set:
-- **Distance metric:** 1 − Pearson correlation between activation vectors across stimuli pairs. This normalises for magnitude differences across networks and layers — we care about the *pattern* of activations, not their scale.
+- **Distance metric:** cosine distance (1 − cosine similarity) between activation vectors across stimulus pairs.
+- **Dual metric (not yet implemented):** A planned extension is to store both cosine distance and Pearson correlation distance (1 − Pearson r between two stimulus activation vectors across units) per network in the HDF5, using keys e.g. `layer_0` (cosine, current) and `layer_0_pearson`. Pearson correlation distance is mathematically equivalent to cosine distance on across-units mean-centred activations, and is the more common choice in ANN representational geometry literature (Kornblith, Raghu et al.) because it handles scale/offset differences across nonlinearities without explicit pre-processing. Practically, it fixes the sigmoid compression issue: sigmoid networks with large hidden sizes produce all-positive vectors that cluster in the same orthant, giving near-zero cosine distances even for well-trained networks; Pearson centering removes this shared offset. Compute cost of adding Pearson is negligible (mean-center then cosine); storage roughly doubles; downstream scripts would need a metric parameter to select which RDMs to load.
 - **Layer convention:**
   - depth=1: one RDM from layer_0
   - depth=2: two RDMs, one from layer_0 (H units) and one from layer_1 (H//2 units)
   - When a single RDM per network is needed: use the **last hidden layer** (layer_0 for depth=1, layer_1 for depth=2). This is most comparable across architectures and closest to the output.
 - **Checkpoint convention for static analyses (Findings #1 and #2):** use `best.npz` (supervised/RNN) or `final.npz` (RL) — peak-performance weights.
+
+### RNN task temporal RDMs
+
+For adding and mnist_rnn, the main analysis uses a single **temporal RDM** per network rather than separate per-timestep RDMs. This encodes the full temporal trajectory into one matrix, making these tasks directly comparable to single-RDM tasks throughout Findings #1 and #2.
+
+**Adding — 600×600 temporal RDM.** Rows are (stimulus, phase) pairs: 100 stimuli × 6 phases, stimulus-major ordering. Each row is the average of the unit-normalised hidden state over all timesteps in that phase for that stimulus. Entry [(stim_i, phase_p), (stim_j, phase_q)] = 1 − (mean unit vector i,p) · (mean unit vector j,q), which equals the average cosine distance over all cross-timestep pairs in those two phases. **Note: valid only for cosine distance** (bilinear in unit vectors); does not generalise to other metrics.
+
+The 6 phases (0-indexed): 0 = before flag1, 1 = at flag1, 2 = between flags, 3 = at flag2, 4 = after flag2, 5 = final step. Phases 0, 2, and 4 are absent for some stimuli (no valid timesteps), making those rows NaN. The NaN mask is fixed across all networks (depends only on the fixed stimulus set). Downstream scripts strip those pairs at load time — no NaN reaches any analysis function.
+
+**mnist_rnn — 1400×1400 temporal RDM.** Rows are (stimulus, timestep) pairs: 100 stimuli × 14 timesteps, stimulus-major. No NaN — every stimulus has a valid hidden state at every timestep.
+
+Both are stored under HDF5 key `temporal` (written by scripts 10b and 10c respectively), replacing the old `layer_{L}_t_{T}` key lookup for all main analyses. The per-timestep keys remain in the HDF5 for the temporal-dynamics sub-analysis (script 11b).
 
 ### Network selection
 - All analyses in Finding #1 use **primary networks only** (no repeats), across all performance categories unless specified.
@@ -48,14 +61,34 @@ Both are distributions of pairwise correlations. The gap between them tells us h
 For each network in each classification task, compute the correlation between the network's RDM and a block-diagonal "category model" RDM where same-category stimuli have dissimilarity 0 and different-category stimuli have dissimilarity 1.
 
 Task-specific models:
-- mnist_dual / mnist_10way / fashion_10way / mnist_rnn: block by digit/class identity
-- spirals: block by arm identity
+- mnist_dual / mnist_10way / fashion_10way: block by digit/class identity (100×100)
+- mnist_rnn: digit block model, expanded to 1400×1400 temporal format — entry for pair [(stim_i, t_a), (stim_j, t_b)] = 0 if digit_i == digit_j, else 1. Phase/timestep is invisible to the model; it tests whether stimulus identity is encoded consistently across all timesteps.
+- spirals: block by arm identity (100×100)
 - parity: by Hamming weight (graded model: |Hamming(a) − Hamming(b)| / 8)
 - cartpole / fourrooms: geometric models (angle gradient, distance-to-goal gradient)
+- adding: see dedicated sub-analysis below.
 
 This tells us: do representations organise stimuli the way the task structure demands? Does category structure increase with performance? Does it vary by HP?
 
 **Output:** correlation with category model, plotted as a function of normalised performance (scatter per task). Separate values for successful / partial / near-chance networks.
+
+#### Adding temporal category models [multi-step analysis]
+
+The 600×600 adding temporal RDM encodes both temporal structure (phases) and stimulus-specific content. Three candidate model families, tested in sequence:
+
+**Step 1 — Phase identity model**
+Entry = 0 if both rows share the same phase (p == q), else 1, regardless of stimulus identity. Tests whether the dominant structure in the RDM is temporal (transitions between task phases) rather than stimulus-specific. Computed and correlated across all networks.
+
+**Step 2 — Stimulus value models**
+For each candidate value dimension (value1, value2, sum = value1 + value2):
+- Entry for pair [(stim_i, phase_p), (stim_j, phase_q)] = |v_i − v_j| / v_max, normalised to [0, 1].
+- The model treats stimulus identity as the only signal and ignores phase.
+- Run on a sample of networks; inspect per-phase correlations — i.e. restrict to pairs where both rows are in the **same phase** and compute Spearman r separately per phase. This reveals which value dimension is encoded at each stage of the task.
+
+**Step 3 — Phase × value interaction model (conditional on Step 2)**
+If Step 2 reveals a clear pattern (e.g., early phases track value1, late phases track sum), build a composite model that assigns a different value dimension to each phase. The specific form is determined by the Step 2 findings. This model is only constructed if the per-phase signal is clear enough to support a principled design.
+
+**Analysis flow:** compute Step 1 correlations first (gives phase-transition signal). Then Step 2 per-phase analysis (identifies what is encoded when). Then, based on findings, optionally design and test Step 3. A sample of ~50 successful networks is sufficient for Steps 1–2; Step 3 runs on the full set.
 
 ### 1.4 Layer comparison (depth=2 networks)
 For networks with depth=2: compute noise ceiling and category structure separately for layer_0 and layer_1.
