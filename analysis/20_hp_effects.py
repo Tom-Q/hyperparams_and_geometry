@@ -525,7 +525,11 @@ def main():
 
     effects_df = pd.DataFrame(all_effects)
 
-    # Save
+    # Save per-network stats (used by script 21)
+    per_net = pd.concat(list(task_dfs.values()), ignore_index=True)
+    per_net.to_csv(out_tables / "rdm_per_network_stats.csv", index=False)
+
+    # Save HP effects
     csv_path = out_tables / "rdm_hp_effects.csv"
     effects_df.to_csv(csv_path, index=False)
     print(f"\nSaved: {csv_path}")

@@ -15,6 +15,8 @@ Runs all analysis scripts in order:
     13  → RDM gallery
     14  → Category structure
     20  → HP effects
+    21  → Latent variable analysis
+    22  → PCA on RDMs
 
 Usage:
     python run_pipeline.py                     # cosine only
@@ -44,6 +46,8 @@ METRIC_SCRIPTS = [
     "13_rdm_gallery.py",
     "14_category_structure.py",
     "20_hp_effects.py",
+    "21_latent_vars.py",
+    "22_rdm_pca.py",
 ]
 
 
