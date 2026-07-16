@@ -17,6 +17,7 @@ Outputs:
     output/analysis/tables/rdm_variance_temporal.csv
 """
 
+import argparse
 import json
 import sys
 from pathlib import Path
@@ -32,7 +33,7 @@ from scipy.stats import rankdata, spearmanr
 ANALYSIS = Path(__file__).parent
 sys.path.insert(0, str(ANALYSIS))
 from analysis_utils import (
-    DATASET_DIR, FIGURES_DIR, RDM_DIR, TABLES_DIR,
+    DATASET_DIR, FIGURES_DIR, RDM_DIR, TABLES_DIR, metric_output_dirs,
 )
 
 TASK_DIR_OVERRIDES = {}
@@ -109,13 +110,13 @@ def between_config_corrs(rdm_dict, n_pairs, rng):
 # MNIST RNN — per (layer, timestep)
 # ---------------------------------------------------------------------------
 
-def load_mnist_rnn_key(layer, timestep, success_threshold):
+def load_mnist_rnn_key(layer, timestep, success_threshold, metric="cosine"):
     """
     Load RDMs for layer L at timestep T.
     Returns: primary_rdms, all_primary_rdms (unfiltered non-repeats), all_rdms (incl. repeats), run_perf
     """
     h5_path = RDM_DIR / "mnist_rnn_rdms.h5"
-    key = f"layer_{layer}_t_{timestep}"
+    key = f"layer_{layer}_t_{timestep}_{metric}"
     all_rdms    = {}   # all runs including repeats
     all_primary = {}   # non-repeat, regardless of perf
     primary     = {}   # non-repeat, successful only
@@ -144,7 +145,7 @@ def load_mnist_rnn_key(layer, timestep, success_threshold):
     return primary, all_primary, all_rdms, run_perf
 
 
-def run_mnist_rnn_temporal(rng):
+def run_mnist_rnn_temporal(rng, metric="cosine"):
     """Compute noise ceiling and variance per (layer, timestep) for MNIST RNN."""
     threshold = load_thresholds().get("mnist_rnn")
     repeat_pairs = load_bo_repeat_pairs("mnist_rnn")
@@ -178,7 +179,7 @@ def run_mnist_rnn_temporal(rng):
 
     for L in range(n_layers):
         for T in range(n_t):
-            primary, all_primary, all_rdms, run_perf = load_mnist_rnn_key(L, T, threshold)
+            primary, all_primary, all_rdms, run_perf = load_mnist_rnn_key(L, T, threshold, metric=metric)
 
             if len(primary) < 3:
                 continue
@@ -234,10 +235,10 @@ def run_mnist_rnn_temporal(rng):
 # Adding — per phase
 # ---------------------------------------------------------------------------
 
-def load_adding_phase_key(phase_name, success_threshold):
+def load_adding_phase_key(phase_name, success_threshold, metric="cosine"):
     """Load phase RDMs for adding (includes repeats for within-config pairing)."""
     h5_path = RDM_DIR / "adding_rdms.h5"
-    key = f"layer_0_{phase_name}"
+    key = f"layer_0_{phase_name}_{metric}"
     all_rdms    = {}
     all_primary = {}
     primary     = {}
@@ -266,7 +267,7 @@ def load_adding_phase_key(phase_name, success_threshold):
     return primary, all_primary, all_rdms, run_perf
 
 
-def run_adding_phases(rng):
+def run_adding_phases(rng, metric="cosine"):
     """Compute noise ceiling and variance per phase for Adding."""
     threshold    = load_thresholds().get("adding")
     repeat_pairs = load_bo_repeat_pairs("adding")
@@ -277,7 +278,7 @@ def run_adding_phases(rng):
         with h5py.File(h5_path, "r") as h5:
             sample_run = sorted(h5.get("runs", {}).keys())[0]
             ckpt       = h5["runs"][sample_run].get("best")
-            has_phases = ckpt is not None and "layer_0_phase_1" in ckpt
+            has_phases = ckpt is not None and "layer_0_phase_1_cosine" in ckpt
     except BlockingIOError:
         print("  [skip adding] adding_rdms.h5 is locked (10b still running?)")
         return {}, [], []
@@ -290,7 +291,7 @@ def run_adding_phases(rng):
     results  = {}
 
     for pname in ADDING_PHASE_NAMES:
-        primary, all_primary, all_rdms, run_perf = load_adding_phase_key(pname, threshold)
+        primary, all_primary, all_rdms, run_perf = load_adding_phase_key(pname, threshold, metric=metric)
 
         if len(primary) < 3:
             print(f"    {pname}: only {len(primary)} networks, skipping")
@@ -475,26 +476,32 @@ def plot_temporal_figure(rnn_results, adding_results, n_layers, n_t):
 # ---------------------------------------------------------------------------
 
 def main():
-    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
-    TABLES_DIR.mkdir(parents=True, exist_ok=True)
+    parser = argparse.ArgumentParser(description="Temporal RSA validity.")
+    parser.add_argument("--metric", choices=["cosine", "pearson"], default="cosine",
+                        help="RDM metric to use (default: cosine).")
+    args = parser.parse_args()
+
+    out_figures, out_tables = metric_output_dirs(args.metric)
+    out_figures.mkdir(parents=True, exist_ok=True)
+    out_tables.mkdir(parents=True, exist_ok=True)
     rng = np.random.default_rng(RNG_SEED)
 
     # MNIST RNN temporal
     print("MNIST RNN temporal analysis ...")
-    rnn_results, rnn_nc_rows, rnn_var_rows, n_layers, n_t = run_mnist_rnn_temporal(rng)
+    rnn_results, rnn_nc_rows, rnn_var_rows, n_layers, n_t = run_mnist_rnn_temporal(rng, metric=args.metric)
     print(f"  {len(rnn_results)} (layer, timestep) keys computed")
 
     # Adding phases
     print("\nAdding phase analysis ...")
-    adding_results, adding_nc_rows, adding_var_rows = run_adding_phases(rng)
+    adding_results, adding_nc_rows, adding_var_rows = run_adding_phases(rng, metric=args.metric)
     print(f"  {len(adding_results)} phases computed")
 
     # Save tables
     all_nc_rows  = rnn_nc_rows  + adding_nc_rows
     all_var_rows = rnn_var_rows + adding_var_rows
 
-    nc_csv  = TABLES_DIR / "rdm_noise_ceiling_temporal.csv"
-    var_csv = TABLES_DIR / "rdm_variance_temporal.csv"
+    nc_csv  = out_tables / "rdm_noise_ceiling_temporal.csv"
+    var_csv = out_tables / "rdm_variance_temporal.csv"
     pd.DataFrame(all_nc_rows).to_csv(nc_csv, index=False)
     pd.DataFrame(all_var_rows).to_csv(var_csv, index=False)
     print(f"\nSaved: {nc_csv}")
@@ -503,7 +510,7 @@ def main():
     # Figure
     if rnn_results or adding_results:
         fig = plot_temporal_figure(rnn_results, adding_results, n_layers, n_t)
-        out = FIGURES_DIR / "f1_noise_ceiling_temporal.pdf"
+        out = out_figures / "f1_noise_ceiling_temporal.pdf"
         fig.savefig(out, bbox_inches="tight")
         plt.close(fig)
         print(f"Saved: {out}")

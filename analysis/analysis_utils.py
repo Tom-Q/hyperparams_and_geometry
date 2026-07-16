@@ -230,6 +230,12 @@ def disk_inventory_all(production_dir: Path = None) -> pd.DataFrame:
 # Convenience filters
 # ---------------------------------------------------------------------------
 
+def metric_output_dirs(metric: str) -> tuple[Path, Path]:
+    """Return (figures_dir, tables_dir) for a specific RDM metric."""
+    base = ANALYSIS_OUT / metric
+    return base / "figures", base / "tables"
+
+
 def primary_df(df: pd.DataFrame) -> pd.DataFrame:
     """Return only primary (non-repeat) observations."""
     return df[~df["is_repeat"]].copy()

@@ -10,6 +10,7 @@ Outputs:
     output/analysis/figures/rdm_gallery_{task}.pdf
 """
 
+import argparse
 import json
 import sys
 from pathlib import Path
@@ -24,6 +25,7 @@ ANALYSIS = Path(__file__).parent
 sys.path.insert(0, str(ANALYSIS))
 from analysis_utils import (
     CACHE_DIR, FIGURES_DIR, RDM_DIR, TABLES_DIR, TASK_NAMES, RL_TASKS,
+    metric_output_dirs,
 )
 from plot_utils import plot_rdm, vec_to_rdm
 
@@ -145,7 +147,7 @@ def get_ckpt_name(task):
     return "final" if task in RL_TASKS else "best"
 
 
-def get_last_layer_key(ckpt_grp, task, depth):
+def get_last_layer_key(ckpt_grp, task, depth, metric="cosine"):
     if task in RNN_TASKS:
         parsed = []
         for k in ckpt_grp.keys():
@@ -162,12 +164,12 @@ def get_last_layer_key(ckpt_grp, task, depth):
             return None
         max_l = max(p[0] for p in parsed)
         max_t = max(p[1] for p in parsed if p[0] == max_l)
-        return f"layer_{max_l}_t_{max_t}"
+        return f"layer_{max_l}_t_{max_t}_{metric}"
     else:
-        return f"layer_{max(0, int(depth) - 1)}"
+        return f"layer_{max(0, int(depth) - 1)}_{metric}"
 
 
-def load_task_rdms(task, success_threshold=None):
+def load_task_rdms(task, success_threshold=None, metric="cosine"):
     """Load RDM vectors for successful primary networks. Returns list of (run_id, perf, vec)."""
     h5_path = RDM_DIR / f"{task}_rdms.h5"
     if not h5_path.exists():
@@ -191,7 +193,7 @@ def load_task_rdms(task, success_threshold=None):
             ckpt_grp = rg.get(ckpt)
             if ckpt_grp is None:
                 continue
-            key = get_last_layer_key(ckpt_grp, task, depth)
+            key = get_last_layer_key(ckpt_grp, task, depth, metric=metric)
             if key is None:
                 continue
             ds = ckpt_grp.get(key)
@@ -215,7 +217,7 @@ def load_thresholds():
 # Figure generation
 # ---------------------------------------------------------------------------
 
-def make_gallery(task, rdm_entries, sort_idx, line_vals, display_label):
+def make_gallery(task, rdm_entries, sort_idx, line_vals, display_label, metric="cosine"):
     """
     rdm_entries : list of (run_id, perf, vec) — all successful primary networks
     """
@@ -250,7 +252,8 @@ def make_gallery(task, rdm_entries, sort_idx, line_vals, display_label):
         plot_rdm(ax, vec, title=f"{run_id}\nperf={perf:.3f}",
                  sort_idx=sort_idx, line_vals=line_vals)
 
-    fig.colorbar(im, ax=axes[-1], shrink=0.8, label="cosine dist")
+    dist_label = "cosine dist" if metric == "cosine" else "Pearson dist"
+    fig.colorbar(im, ax=axes[-1], shrink=0.8, label=dist_label)
     fig.suptitle(display_label, fontsize=10, fontweight="bold")
     return fig
 
@@ -260,14 +263,20 @@ def make_gallery(task, rdm_entries, sort_idx, line_vals, display_label):
 # ---------------------------------------------------------------------------
 
 def main():
-    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+    parser = argparse.ArgumentParser(description="RDM gallery.")
+    parser.add_argument("--metric", choices=["cosine", "pearson"], default="cosine",
+                        help="RDM metric to use (default: cosine).")
+    args = parser.parse_args()
+
+    out_figures, _ = metric_output_dirs(args.metric)
+    out_figures.mkdir(parents=True, exist_ok=True)
     thresholds = load_thresholds()
 
     for task in TASK_NAMES:
         threshold = thresholds.get(task)
         print(f"  {task} ...", end="", flush=True)
 
-        rdm_entries = load_task_rdms(task, success_threshold=threshold)
+        rdm_entries = load_task_rdms(task, success_threshold=threshold, metric=args.metric)
         if not rdm_entries:
             print(" [no RDMs found]")
             continue
@@ -277,8 +286,8 @@ def main():
         sort_idx, line_vals = get_sort_info(task)
         display_label = TASK_LABELS.get(task, task)
 
-        fig = make_gallery(task, rdm_entries, sort_idx, line_vals, display_label)
-        out_path = FIGURES_DIR / f"rdm_gallery_{task}.pdf"
+        fig = make_gallery(task, rdm_entries, sort_idx, line_vals, display_label, metric=args.metric)
+        out_path = out_figures / f"rdm_gallery_{task}.pdf"
         fig.savefig(out_path, bbox_inches="tight")
         plt.close(fig)
         print(f" → {out_path.name}")

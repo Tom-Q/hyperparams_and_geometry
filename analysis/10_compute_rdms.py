@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """
-Step 10: Compute cosine-distance RDMs for all tasks.
+Step 10: Compute cosine- and Pearson-distance RDMs for all tasks.
 
-For each network, loads every checkpoint .npz file, computes pairwise cosine
-distances between stimulus activation vectors for each layer/timestep key, and
-stores the upper triangle as float32 in an HDF5 file.
+For each network, loads every checkpoint .npz file and stores two RDMs per
+activation key in an HDF5 file:
+  {key}_cosine  — cosine distance
+  {key}_pearson — cosine distance on across-units mean-centered activations
+                  (equivalent to 1 − Pearson correlation)
 
 Key format in .npz:
   MLP tasks   — "layer_0", "layer_1"  (shape: N_stimuli × hidden_size)
@@ -17,7 +19,8 @@ HDF5 layout:
   runs/{run_id}/
     [attrs]      — iteration, is_repeat, performance, all HP values, cont_unit_vals
     {checkpoint}/
-      {key}      — float32 array of length n_pairs (upper triangle, row-major)
+      {key}_cosine  — float32 array of length n_pairs (upper triangle, row-major)
+      {key}_pearson — float32 array of length n_pairs (upper triangle, row-major)
 
 Usage:
   python 10_compute_rdms.py                        # all tasks
@@ -52,7 +55,7 @@ def upper_triangle_indices(n):
     return np.triu_indices(n, k=1)
 
 
-def compute_rdm(activations: np.ndarray):
+def compute_cosine_rdm(activations: np.ndarray):
     """
     Compute cosine-distance RDM upper triangle from (N_stimuli, D) activations.
     Returns float32 array of length N_stimuli*(N_stimuli-1)//2, or None if any
@@ -61,9 +64,28 @@ def compute_rdm(activations: np.ndarray):
     if np.any(~np.isfinite(activations)):
         return None
     norms = np.linalg.norm(activations, axis=1)
-    if np.any(norms < ZERO_NORM_THRESHOLD):
+    if np.any(norms < ZERO_NORM_THRESHOLD) or not np.all(np.isfinite(norms)):
         return None
     dist = cosine_distances(activations.astype(np.float32))
+    n = dist.shape[0]
+    rows, cols = np.triu_indices(n, k=1)
+    return dist[rows, cols].astype(np.float32)
+
+
+def compute_pearson_rdm(activations: np.ndarray):
+    """
+    Compute Pearson-distance RDM upper triangle from (N_stimuli, D) activations.
+    Pearson distance = cosine distance on across-units mean-centered activations
+    (subtract per-stimulus mean across all units). Returns float32 array of
+    length N_stimuli*(N_stimuli-1)//2, or None if degenerate.
+    """
+    if np.any(~np.isfinite(activations)):
+        return None
+    centered = activations - activations.mean(axis=1, keepdims=True)
+    norms = np.linalg.norm(centered, axis=1)
+    if np.any(norms < ZERO_NORM_THRESHOLD) or not np.all(np.isfinite(norms)):
+        return None
+    dist = cosine_distances(centered.astype(np.float32))
     n = dist.shape[0]
     rows, cols = np.triu_indices(n, k=1)
     return dist[rows, cols].astype(np.float32)
@@ -164,39 +186,57 @@ def process_task(task: str, overwrite: bool):
                     continue
 
                 for key in sorted(npz.keys()):
-                    if key in ckpt_grp and not overwrite:
-                        n_rdms_skipped += 1
+                    cosine_key = f"{key}_cosine"
+                    pearson_key = f"{key}_pearson"
+
+                    need_cosine = cosine_key not in ckpt_grp or overwrite
+                    need_pearson = pearson_key not in ckpt_grp or overwrite
+
+                    if not need_cosine and not need_pearson:
+                        n_rdms_skipped += 2
                         continue
 
                     activations = npz[key]
-                    rdm = compute_rdm(activations)
 
-                    if key in ckpt_grp:
-                        del ckpt_grp[key]
+                    if need_cosine:
+                        rdm_c = compute_cosine_rdm(activations)
+                        if cosine_key in ckpt_grp:
+                            del ckpt_grp[cosine_key]
+                        if rdm_c is None:
+                            n_degenerate += 1
+                            flagged.append(f"{run_id}/{ckpt_name}/{cosine_key}")
+                            ds = ckpt_grp.create_dataset(
+                                cosine_key, data=np.array([], dtype=np.float32))
+                            ds.attrs["degenerate"] = True
+                        else:
+                            ckpt_grp.create_dataset(
+                                cosine_key, data=rdm_c,
+                                compression="gzip", compression_opts=4,
+                                shuffle=True,
+                            )
+                            n_rdms_computed += 1
+                            if not n_pairs_written and "n_stimuli" not in h5["meta"].attrs:
+                                h5["meta"].attrs["n_stimuli"] = activations.shape[0]
+                                h5["meta"].attrs["n_pairs"] = len(rdm_c)
+                                n_pairs_written = True
 
-                    if rdm is None:
-                        n_degenerate += 1
-                        tag = f"{run_id}/{ckpt_name}/{key}"
-                        flagged.append(tag)
-                        # Store zero-length dataset so downstream code can tell
-                        # "degenerate" apart from "checkpoint not reached"
-                        ds = ckpt_grp.create_dataset(key, data=np.array([], dtype=np.float32))
-                        ds.attrs["degenerate"] = True
-                        continue
-
-                    ckpt_grp.create_dataset(
-                        key, data=rdm,
-                        compression="gzip", compression_opts=4,
-                        shuffle=True,
-                    )
-                    n_rdms_computed += 1
-
-                    # Write n_stimuli / n_pairs to meta once
-                    if not n_pairs_written and "n_stimuli" not in h5["meta"].attrs:
-                        n_stim = activations.shape[0]
-                        h5["meta"].attrs["n_stimuli"] = n_stim
-                        h5["meta"].attrs["n_pairs"] = len(rdm)
-                        n_pairs_written = True
+                    if need_pearson:
+                        rdm_p = compute_pearson_rdm(activations)
+                        if pearson_key in ckpt_grp:
+                            del ckpt_grp[pearson_key]
+                        if rdm_p is None:
+                            n_degenerate += 1
+                            flagged.append(f"{run_id}/{ckpt_name}/{pearson_key}")
+                            ds = ckpt_grp.create_dataset(
+                                pearson_key, data=np.array([], dtype=np.float32))
+                            ds.attrs["degenerate"] = True
+                        else:
+                            ckpt_grp.create_dataset(
+                                pearson_key, data=rdm_p,
+                                compression="gzip", compression_opts=4,
+                                shuffle=True,
+                            )
+                            n_rdms_computed += 1
 
             if n_runs_found % 100 == 0:
                 print(f"  {n_runs_found}/{n_obs} runs processed ...", flush=True)

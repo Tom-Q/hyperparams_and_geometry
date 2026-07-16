@@ -16,6 +16,7 @@ Outputs:
     output/analysis/tables/rdm_category_structure.csv   (per-network, reused in Finding #2)
 """
 
+import argparse
 import json
 import sys
 from pathlib import Path
@@ -32,6 +33,7 @@ ANALYSIS = Path(__file__).parent
 sys.path.insert(0, str(ANALYSIS))
 from analysis_utils import (
     CACHE_DIR, DATASET_DIR, FIGURES_DIR, RDM_DIR, TABLES_DIR,
+    metric_output_dirs,
     TASK_NAMES, RL_TASKS, task_meta,
 )
 
@@ -132,14 +134,14 @@ def get_ckpt_name(task):
     return "final" if task in RL_TASKS else "best"
 
 
-def get_last_layer_key(ckpt_grp, task, depth):
+def get_last_layer_key(ckpt_grp, task, depth, metric="cosine"):
     """Key for the primary RDM in a checkpoint group."""
     if task in RNN_TASKS:
-        return "temporal"
-    return f"layer_{max(0, int(depth) - 1)}"
+        return f"temporal_{metric}"
+    return f"layer_{max(0, int(depth) - 1)}_{metric}"
 
 
-def load_all_primary_rdms(task):
+def load_all_primary_rdms(task, metric="cosine"):
     """Load all primary network RDMs regardless of performance. Returns list of (run_id, perf, vec)."""
     h5_path = RDM_DIR / f"{task}_rdms.h5"
     if not h5_path.exists():
@@ -159,7 +161,7 @@ def load_all_primary_rdms(task):
             ckpt_grp = rg.get(ckpt)
             if ckpt_grp is None:
                 continue
-            key = get_last_layer_key(ckpt_grp, task, depth)
+            key = get_last_layer_key(ckpt_grp, task, depth, metric=metric)
             if key is None:
                 continue
             ds = ckpt_grp.get(key)
@@ -334,7 +336,7 @@ def _adding_phase_masks():
     return masks
 
 
-def _load_adding_phase_rdms(success_threshold):
+def _load_adding_phase_rdms(success_threshold, metric="cosine"):
     """
     Load successful primary network phase RDMs from adding_rdms.h5.
     Returns dict phase_name -> list of float32 vectors, or None if none exist.
@@ -358,7 +360,7 @@ def _load_adding_phase_rdms(success_threshold):
             if ckpt_grp is None:
                 continue
             for pname in ADDING_PHASE_NAMES:
-                key = f"layer_0_{pname}"
+                key = f"layer_0_{pname}_{metric}"
                 if key not in ckpt_grp:
                     continue
                 found = True
@@ -370,7 +372,7 @@ def _load_adding_phase_rdms(success_threshold):
     return result if found else None
 
 
-def plot_adding_phases(thresholds):
+def plot_adding_phases(thresholds, metric="cosine", out_figures=FIGURES_DIR):
     """Phase-aligned category structure figure for the Adding task."""
     npz_path = MODELS_DIR / "adding.npz"
     if not npz_path.exists():
@@ -379,7 +381,7 @@ def plot_adding_phases(thresholds):
 
     threshold = (thresholds.get("adding") or {}).get("upper")
     try:
-        phase_data = _load_adding_phase_rdms(threshold)
+        phase_data = _load_adding_phase_rdms(threshold, metric=metric)
     except BlockingIOError:
         print("  [skip adding phases] adding_rdms.h5 is locked (10b still running?)")
         return
@@ -451,7 +453,7 @@ def plot_adding_phases(thresholds):
     ax.tick_params(labelsize=9)
 
     fig.tight_layout()
-    out = FIGURES_DIR / "f1_category_adding_phases.pdf"
+    out = out_figures / "f1_category_adding_phases.pdf"
     fig.savefig(out, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved: {out}")
@@ -461,7 +463,7 @@ def plot_adding_phases(thresholds):
 # MNIST RNN: temporal category structure (all timesteps × layers)
 # ---------------------------------------------------------------------------
 
-def _load_mnist_rnn_temporal(success_threshold):
+def _load_mnist_rnn_temporal(success_threshold, metric="cosine"):
     """
     Load RDMs at every (layer, timestep) for successful primary networks.
     Returns:
@@ -470,6 +472,7 @@ def _load_mnist_rnn_temporal(success_threshold):
       n_t : number of timesteps
     """
     h5_path = RDM_DIR / "mnist_rnn_rdms.h5"
+    suffix = f"_{metric}"
     data = {}
     n_t = 0
     n_layers = 0
@@ -489,7 +492,7 @@ def _load_mnist_rnn_temporal(success_threshold):
             if ckpt_grp is None:
                 continue
             for key in ckpt_grp.keys():
-                if "_t_" not in key:
+                if "_t_" not in key or not key.endswith(suffix):
                     continue
                 parts = key.split("_")
                 try:
@@ -497,7 +500,7 @@ def _load_mnist_rnn_temporal(success_threshold):
                     T = int(parts[3])
                 except (IndexError, ValueError):
                     continue
-                n_t     = max(n_t, T + 1)
+                n_t      = max(n_t, T + 1)
                 n_layers = max(n_layers, L + 1)
                 ds = ckpt_grp[key]
                 if ds.attrs.get("degenerate", False) or len(ds) == 0:
@@ -507,7 +510,7 @@ def _load_mnist_rnn_temporal(success_threshold):
     return data, n_layers, n_t
 
 
-def plot_mnist_rnn_temporal(thresholds):
+def plot_mnist_rnn_temporal(thresholds, metric="cosine", out_figures=FIGURES_DIR):
     """Per-timestep category (digit) correlation figure for MNIST RNN."""
     npz_path = MODELS_DIR / "mnist_rnn.npz"
     if not npz_path.exists():
@@ -515,7 +518,7 @@ def plot_mnist_rnn_temporal(thresholds):
         return
 
     threshold = (thresholds.get("mnist_rnn") or {}).get("upper")
-    temporal_data, n_layers, n_t = _load_mnist_rnn_temporal(threshold)
+    temporal_data, n_layers, n_t = _load_mnist_rnn_temporal(threshold, metric=metric)
     if not temporal_data:
         print("  [skip mnist_rnn temporal] no RDMs found")
         return
@@ -573,7 +576,7 @@ def plot_mnist_rnn_temporal(thresholds):
     ax.tick_params(labelsize=9)
 
     fig.tight_layout()
-    out = FIGURES_DIR / "f1_category_mnist_rnn_temporal.pdf"
+    out = out_figures / "f1_category_mnist_rnn_temporal.pdf"
     fig.savefig(out, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved: {out}")
@@ -584,8 +587,14 @@ def plot_mnist_rnn_temporal(thresholds):
 # ---------------------------------------------------------------------------
 
 def main():
-    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
-    TABLES_DIR.mkdir(parents=True, exist_ok=True)
+    parser = argparse.ArgumentParser(description="Category structure analysis.")
+    parser.add_argument("--metric", choices=["cosine", "pearson"], default="cosine",
+                        help="RDM metric to use (default: cosine).")
+    args = parser.parse_args()
+
+    out_figures, out_tables = metric_output_dirs(args.metric)
+    out_figures.mkdir(parents=True, exist_ok=True)
+    out_tables.mkdir(parents=True, exist_ok=True)
 
     thresholds = load_thresholds()
     meta       = task_meta()
@@ -622,7 +631,7 @@ def main():
                     rows_idx, cols_idx = np.triu_indices(n, k=1)
                     cat_vecs[name] = D[rows_idx, cols_idx].astype(np.float32)
 
-        rdm_entries = load_all_primary_rdms(task)
+        rdm_entries = load_all_primary_rdms(task, metric=args.metric)
         if not rdm_entries:
             print(" [no RDMs]")
             continue
@@ -670,7 +679,7 @@ def main():
     df = pd.DataFrame(all_rows)
 
     # Save CSV
-    csv_path = TABLES_DIR / "rdm_category_structure.csv"
+    csv_path = out_tables / "rdm_category_structure.csv"
     df.to_csv(csv_path, index=False)
     print(f"\nSaved: {csv_path}")
 
@@ -700,17 +709,17 @@ def main():
                  fontsize=11)
     fig.tight_layout(rect=[0, 0.03, 1, 0.95])
 
-    out_path = FIGURES_DIR / "f1_category_structure.pdf"
+    out_path = out_figures / "f1_category_structure.pdf"
     fig.savefig(out_path, bbox_inches="tight", dpi=150)
     plt.close(fig)
     print(f"Saved: {out_path}")
 
     # Temporal analyses
     print("\nAdding phase analysis ...")
-    plot_adding_phases(thresholds)
+    plot_adding_phases(thresholds, metric=args.metric, out_figures=out_figures)
 
     print("\nMNIST RNN temporal analysis ...")
-    plot_mnist_rnn_temporal(thresholds)
+    plot_mnist_rnn_temporal(thresholds, metric=args.metric, out_figures=out_figures)
 
 
 if __name__ == "__main__":

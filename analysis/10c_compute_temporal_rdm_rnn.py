@@ -1,22 +1,19 @@
 #!/usr/bin/env python3
 """
-Step 10c: Full temporal RDM for mnist_rnn.
+Step 10c: Full temporal RDMs (cosine + Pearson) for mnist_rnn.
 
-Produces a single 1400×1400 RDM per network: rows/cols are all
-(stimulus, timestep) pairs (100 stimuli × 14 timesteps), ordered
-stimulus-major: (stim_0, t=0), ..., (stim_0, t=13), (stim_1, t=0), ...
+Produces two 1400×1400 RDMs per network stored as "temporal_cosine" and
+"temporal_pearson". Rows/cols are (stimulus, timestep) pairs: 100 stimuli ×
+14 timesteps, ordered stimulus-major.
 
-Entry [(stim_i, t_a), (stim_j, t_b)] = cosine distance between h_i[t_a]
-and h_j[t_b], computed as 1 - M @ M.T where M is the (1400, H) matrix of
-unit-normalised hidden states.
+temporal_cosine: 1 - M @ M.T where M = (1400, H) matrix of unit-normalised
+  hidden states (mean unit vector trick — valid for cosine only).
 
-WARNING — cosine distance only: this does NOT generalise to other metrics
-(cf. reference_code_rdm.py:average_values for the general approach).
+temporal_pearson: same but hidden states are first mean-centered across units,
+  then unit-normalized, giving Pearson correlation distance.
 
 No NaN entries: every stimulus has a valid activation at every timestep.
-Uses the deepest hidden layer (same convention as other per-timestep analyses).
-
-Stored as key "temporal" in each run/checkpoint group of mnist_rnn_rdms.h5.
+Uses the deepest hidden layer (same convention as per-timestep analyses).
 
 Usage:
   python 10c_compute_temporal_rdm_rnn.py
@@ -49,30 +46,43 @@ def _unit_norm(mat):
     return mat / np.where(norms > 1e-8, norms, 1.0)
 
 
-def build_temporal_matrix(acts_by_t):
+def build_temporal_matrices(acts_by_t):
     """
-    Build (N_ROWS, H) = (1400, H) matrix of unit-normalised hidden states.
-
+    Build two (N_ROWS, H) = (1400, H) matrices:
+      M_cos:  unit-normalised hidden states (for cosine RDM)
+      M_raw:  raw hidden states (for Pearson RDM)
     Row ordering: stimulus-major — all timesteps for stim_0, then stim_1, ...
-    Row i*T + t = unit(h_i[t]).
-
-    WARNING — cosine distance only: RDM = 1 - M @ M.T.
     """
-    # acts_by_t[t] is (N_STIM, H); stack to (T, N_STIM, H), then stim-major reshape
     acts = np.stack([acts_by_t[t] for t in range(T)], axis=0)  # (T, N_STIM, H)
     acts = acts.transpose(1, 0, 2).reshape(N_ROWS, -1).astype(np.float64)  # (N_ROWS, H)
-    return _unit_norm(acts).astype(np.float32)
+    return _unit_norm(acts).astype(np.float32), acts.astype(np.float32)
 
 
-def compute_temporal_rdm(M):
-    """
-    Upper-triangle of 1 - M @ M.T.
-    Returns None if any activation is non-finite (degenerate network).
-    """
-    if not np.all(np.isfinite(M)):
+def compute_temporal_cosine_rdm(M_cos):
+    """Upper-triangle of 1 - M_cos @ M_cos.T. Returns None if non-finite."""
+    if not np.all(np.isfinite(M_cos)):
         return None
-    Md   = M.astype(np.float64)
-    D    = np.clip(1.0 - Md @ Md.T, 0.0, 2.0)
+    Md = M_cos.astype(np.float64)
+    D  = np.clip(1.0 - Md @ Md.T, 0.0, 2.0)
+    rows, cols = np.triu_indices(N_ROWS, k=1)
+    return D[rows, cols].astype(np.float32)
+
+
+def compute_temporal_pearson_rdm(M_raw):
+    """
+    Pearson-distance temporal RDM. Mean-centers each row across units,
+    unit-normalizes, then 1 - M @ M.T. Returns None if non-finite or
+    any row is constant (degenerate).
+    """
+    if not np.all(np.isfinite(M_raw)):
+        return None
+    Md = M_raw.astype(np.float64)
+    Md -= Md.mean(axis=1, keepdims=True)
+    norms = np.linalg.norm(Md, axis=1)
+    if np.any(norms < 1e-8) or not np.all(np.isfinite(norms)):
+        return None
+    Md /= norms[:, None]
+    D   = np.clip(1.0 - Md @ Md.T, 0.0, 2.0)
     rows, cols = np.triu_indices(N_ROWS, k=1)
     return D[rows, cols].astype(np.float32)
 
@@ -122,8 +132,11 @@ def main():
                 ckpt_name = ckpt_path.stem
                 ckpt_grp  = run_grp.require_group(ckpt_name)
 
-                if "temporal" in ckpt_grp and not args.overwrite:
-                    n_skipped += 1
+                need_cosine  = "temporal_cosine"  not in ckpt_grp or args.overwrite
+                need_pearson = "temporal_pearson" not in ckpt_grp or args.overwrite
+
+                if not need_cosine and not need_pearson:
+                    n_skipped += 2
                     continue
 
                 try:
@@ -132,7 +145,6 @@ def main():
                     print(f"  [warn] cannot load {run_id}/{ckpt_name}: {e}")
                     continue
 
-                # Deepest layer
                 layers = sorted(set(
                     int(k.split("_t_")[0].split("layer_")[1])
                     for k in npz.keys() if "_t_" in k
@@ -152,23 +164,37 @@ def main():
                 if missing:
                     continue
 
-                M   = build_temporal_matrix(acts_by_t)
-                rdm = compute_temporal_rdm(M)
+                M_cos, M_raw = build_temporal_matrices(acts_by_t)
 
-                if "temporal" in ckpt_grp:
-                    del ckpt_grp["temporal"]
+                if need_cosine:
+                    rdm_c = compute_temporal_cosine_rdm(M_cos)
+                    if "temporal_cosine" in ckpt_grp:
+                        del ckpt_grp["temporal_cosine"]
+                    if rdm_c is None:
+                        ds = ckpt_grp.create_dataset(
+                            "temporal_cosine", data=np.array([], dtype=np.float32))
+                        ds.attrs["degenerate"] = True
+                        n_degen += 1
+                    else:
+                        ckpt_grp.create_dataset(
+                            "temporal_cosine", data=rdm_c,
+                            compression="gzip", compression_opts=4, shuffle=True)
+                        n_computed += 1
 
-                if rdm is None:
-                    ds = ckpt_grp.create_dataset(
-                        "temporal", data=np.array([], dtype=np.float32))
-                    ds.attrs["degenerate"] = True
-                    n_degen += 1
-                    continue
-
-                ckpt_grp.create_dataset(
-                    "temporal", data=rdm,
-                    compression="gzip", compression_opts=4, shuffle=True)
-                n_computed += 1
+                if need_pearson:
+                    rdm_p = compute_temporal_pearson_rdm(M_raw)
+                    if "temporal_pearson" in ckpt_grp:
+                        del ckpt_grp["temporal_pearson"]
+                    if rdm_p is None:
+                        ds = ckpt_grp.create_dataset(
+                            "temporal_pearson", data=np.array([], dtype=np.float32))
+                        ds.attrs["degenerate"] = True
+                        n_degen += 1
+                    else:
+                        ckpt_grp.create_dataset(
+                            "temporal_pearson", data=rdm_p,
+                            compression="gzip", compression_opts=4, shuffle=True)
+                        n_computed += 1
 
             if (idx + 1) % 100 == 0:
                 print(f"  {idx + 1}/{n_total} runs processed ...", flush=True)

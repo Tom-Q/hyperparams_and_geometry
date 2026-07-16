@@ -1,23 +1,19 @@
 #!/usr/bin/env python3
 """
-Step 10b: Phase-averaged temporal RDM for the Adding task.
+Step 10b: Phase-averaged temporal RDMs (cosine + Pearson) for the Adding task.
 
-Produces a single RDM per network where each row/col is a (stimulus, phase)
-pair: 100 stimuli × 6 phases = 600 rows, ordered stimulus-major:
-(stim_0, phase_0), ..., (stim_0, phase_5), (stim_1, phase_0), ...
+Produces two RDMs per network stored as "temporal_cosine" and "temporal_pearson".
+Each has 600 rows/cols: (stimulus, phase) pairs for 100 stimuli × 6 phases,
+ordered stimulus-major: (stim_0, phase_0), ..., (stim_0, phase_5), ...
 
-Entry for pair [(stim_i, phase_p), (stim_j, phase_q)] = average cosine
-distance over all cross-timestep pairs (t_a in V_i[p], t_b in V_j[q]):
+temporal_cosine: 1 - M_cos @ M_cos.T
+  where M_cos[i,p] = mean of unit(h_i[t]) over valid timesteps t in phase p.
+  (mean unit vector trick — valid only for cosine distance)
 
-    avg_dist = 1 - m_i[p] · m_j[q]
-
-where m_i[p] = mean of unit(h_i[t]) over valid timesteps t in phase p.
-The full RDM is 1 - M @ M.T for the (600, H) matrix M of mean unit vectors.
-
-WARNING — cosine distance only: this factoring does NOT hold for Euclidean,
-Mahalanobis, or any other metric. For a different metric, build the full
-(N_STIM×T)×(N_STIM×T) pairwise distance matrix and average within groups
-explicitly (cf. reference_code_rdm.py:average_values).
+temporal_pearson: 1 - M_pear @ M_pear.T
+  where M_pear[i,p] = mean of h_i[t] over valid phase timesteps, then
+  mean-centered across units and unit-normalized. Equivalent to Pearson
+  correlation distance between phase-mean activation patterns.
 
 Phases (0-indexed):
   0  before flag1       t < flag1         NaN where flag1 == 0
@@ -27,13 +23,9 @@ Phases (0-indexed):
   4  after flag2        flag2 < t < T-1   NaN where flag2 >= T-2
   5  final step         t = T-1
 
-Rows where a stimulus has no valid timesteps in a phase are NaN. The NaN
-mask is fixed across all networks (depends only on the fixed stimulus set)
-and stored in meta/temporal_valid_mask. Use nan_policy='omit' downstream
+Rows where a stimulus has no valid timesteps in a phase are NaN (fixed across
+networks, depends only on the stimulus set). Use nan_policy='omit' downstream
 for adding only; NaN in any other task indicates a bug.
-
-Stored as key "temporal" in each run/checkpoint group of adding_rdms.h5.
-Row metadata stored once in meta/.
 
 Usage:
   python 10b_compute_adding_phases.py
@@ -115,56 +107,88 @@ def _unit_norm(mat):
     return mat / np.where(norms > 1e-8, norms, 1.0)
 
 
-def build_temporal_matrix(acts_by_t, flag_pos):
+def build_temporal_matrices(acts_by_t, flag_pos):
     """
-    Build (N_ROWS, H) = (600, H) matrix M of phase mean unit vectors.
-
-    M[i * N_PHASES + p] = mean of unit(h_i[t]) over t valid for phase p.
-    Rows where stimulus i has no valid timesteps in phase p are NaN.
-
-    WARNING — cosine distance only: RDM = 1 - M @ M.T.
-    Does not generalise to other metrics.
+    Build two (N_ROWS, H) = (600, H) matrices:
+      M_cos:  phase mean unit vectors (for cosine RDM, mean unit vector trick)
+      M_raw:  phase mean raw activations (for Pearson RDM)
+    Rows where a stimulus has no valid timesteps in that phase are NaN in both.
     """
     f1, f2 = flag_pos[:, 0], flag_pos[:, 1]
-    H  = acts_by_t[0].shape[1]
-    M  = np.full((N_ROWS, H), np.nan, dtype=np.float64)
+    H      = acts_by_t[0].shape[1]
+    M_cos  = np.full((N_ROWS, H), np.nan, dtype=np.float64)
+    M_raw  = np.full((N_ROWS, H), np.nan, dtype=np.float64)
 
-    def _mean_unit(valid_fn):
-        acc = np.zeros((N_STIM, H), dtype=np.float64)
-        cnt = np.zeros(N_STIM,      dtype=np.int32)
+    def _mean_both(valid_fn, row_slice):
+        acc_u = np.zeros((N_STIM, H), dtype=np.float64)
+        acc_r = np.zeros((N_STIM, H), dtype=np.float64)
+        cnt   = np.zeros(N_STIM,      dtype=np.int32)
         for t in range(T):
             ok = valid_fn(t)
-            if not ok.any():
+            if not np.any(ok):
                 continue
-            acc[ok] += _unit_norm(acts_by_t[t].astype(np.float64))[ok]
-            cnt[ok] += 1
-        out = np.full((N_STIM, H), np.nan, dtype=np.float64)
+            a = acts_by_t[t].astype(np.float64)
+            acc_u[ok] += _unit_norm(a)[ok]
+            acc_r[ok] += a[ok]
+            cnt[ok]   += 1
         valid = cnt > 0
-        out[valid] = acc[valid] / cnt[valid, None]
-        return out
+        out_u = np.full((N_STIM, H), np.nan, dtype=np.float64)
+        out_r = np.full((N_STIM, H), np.nan, dtype=np.float64)
+        out_u[valid] = acc_u[valid] / cnt[valid, None]
+        out_r[valid] = acc_r[valid] / cnt[valid, None]
+        M_cos[row_slice] = out_u
+        M_raw[row_slice] = out_r
 
-    def _single_step(t_per_stim):
+    def _single_both(t_per_stim, row_slice):
         mat = np.stack([acts_by_t[t_per_stim[i]][i]
                         for i in range(N_STIM)]).astype(np.float64)
-        return _unit_norm(mat)
+        M_cos[row_slice] = _unit_norm(mat)
+        M_raw[row_slice] = mat
 
-    M[0::N_PHASES] = _mean_unit(lambda t: t < f1)
-    M[1::N_PHASES] = _single_step(f1)
-    M[2::N_PHASES] = _mean_unit(lambda t: (t > f1) & (t < f2))
-    M[3::N_PHASES] = _single_step(f2)
-    M[4::N_PHASES] = _mean_unit(lambda t: (t > f2) & (t < T - 1))
-    M[5::N_PHASES] = _unit_norm(acts_by_t[T - 1].astype(np.float64))
+    _mean_both(lambda t: t < f1,               slice(0, None, N_PHASES))
+    _single_both(f1,                            slice(1, None, N_PHASES))
+    _mean_both(lambda t: (t > f1) & (t < f2),  slice(2, None, N_PHASES))
+    _single_both(f2,                            slice(3, None, N_PHASES))
+    _mean_both(lambda t: (t > f2) & (t < T-1), slice(4, None, N_PHASES))
+    mat = acts_by_t[T - 1].astype(np.float64)
+    M_cos[5::N_PHASES] = _unit_norm(mat)
+    M_raw[5::N_PHASES] = mat
 
-    return M.astype(np.float32)
+    return M_cos.astype(np.float32), M_raw.astype(np.float32)
 
 
-def compute_temporal_rdm(M):
+def compute_temporal_cosine_rdm(M_cos):
     """
-    Upper-triangle of 1 - M @ M.T.
-    NaN rows in M produce NaN entries (propagates through matrix multiply).
-    Returns None if no valid (non-NaN) entries exist at all.
+    Upper-triangle of 1 - M_cos @ M_cos.T.
+    NaN rows propagate as NaN. Returns None if no finite entries exist.
     """
-    Md   = M.astype(np.float64)
+    Md   = M_cos.astype(np.float64)
+    gram = Md @ Md.T
+    if not np.any(np.isfinite(gram)):
+        return None
+    D = 1.0 - gram
+    finite = np.isfinite(D)
+    D[finite] = np.clip(D[finite], 0.0, 2.0)
+    rows, cols = np.triu_indices(N_ROWS, k=1)
+    return D[rows, cols].astype(np.float32)
+
+
+def compute_temporal_pearson_rdm(M_raw):
+    """
+    Pearson-distance temporal RDM from raw phase-mean activations.
+    Mean-centers each valid row across units, unit-normalizes, then 1 - M @ M.T.
+    NaN rows (invalid phases) propagate as NaN in the output.
+    Returns None if no valid rows or any valid row is constant (degenerate).
+    """
+    Md = M_raw.astype(np.float64)
+    valid = np.all(np.isfinite(Md), axis=1)
+    if not valid.any():
+        return None
+    Md[valid] -= Md[valid].mean(axis=1, keepdims=True)
+    norms = np.linalg.norm(Md[valid], axis=1)
+    if np.any(norms < 1e-8) or not np.all(np.isfinite(norms)):
+        return None
+    Md[valid] /= norms[:, None]
     gram = Md @ Md.T
     if not np.any(np.isfinite(gram)):
         return None
@@ -236,8 +260,11 @@ def main():
                 ckpt_name = ckpt_path.stem
                 ckpt_grp  = run_grp.require_group(ckpt_name)
 
-                if "temporal" in ckpt_grp and not args.overwrite:
-                    n_skipped += 1
+                need_cosine  = "temporal_cosine"  not in ckpt_grp or args.overwrite
+                need_pearson = "temporal_pearson" not in ckpt_grp or args.overwrite
+
+                if not need_cosine and not need_pearson:
+                    n_skipped += 2
                     continue
 
                 try:
@@ -265,23 +292,37 @@ def main():
                 if missing:
                     continue
 
-                M   = build_temporal_matrix(acts_by_t, flag_pos)
-                rdm = compute_temporal_rdm(M)
+                M_cos, M_raw = build_temporal_matrices(acts_by_t, flag_pos)
 
-                if "temporal" in ckpt_grp:
-                    del ckpt_grp["temporal"]
+                if need_cosine:
+                    rdm_c = compute_temporal_cosine_rdm(M_cos)
+                    if "temporal_cosine" in ckpt_grp:
+                        del ckpt_grp["temporal_cosine"]
+                    if rdm_c is None:
+                        ds = ckpt_grp.create_dataset(
+                            "temporal_cosine", data=np.array([], dtype=np.float32))
+                        ds.attrs["degenerate"] = True
+                        n_degen += 1
+                    else:
+                        ckpt_grp.create_dataset(
+                            "temporal_cosine", data=rdm_c,
+                            compression="gzip", compression_opts=4, shuffle=True)
+                        n_computed += 1
 
-                if rdm is None:
-                    ds = ckpt_grp.create_dataset(
-                        "temporal", data=np.array([], dtype=np.float32))
-                    ds.attrs["degenerate"] = True
-                    n_degen += 1
-                    continue
-
-                ckpt_grp.create_dataset(
-                    "temporal", data=rdm,
-                    compression="gzip", compression_opts=4, shuffle=True)
-                n_computed += 1
+                if need_pearson:
+                    rdm_p = compute_temporal_pearson_rdm(M_raw)
+                    if "temporal_pearson" in ckpt_grp:
+                        del ckpt_grp["temporal_pearson"]
+                    if rdm_p is None:
+                        ds = ckpt_grp.create_dataset(
+                            "temporal_pearson", data=np.array([], dtype=np.float32))
+                        ds.attrs["degenerate"] = True
+                        n_degen += 1
+                    else:
+                        ckpt_grp.create_dataset(
+                            "temporal_pearson", data=rdm_p,
+                            compression="gzip", compression_opts=4, shuffle=True)
+                        n_computed += 1
 
             if (idx + 1) % 100 == 0:
                 print(f"  {idx + 1}/{n_total} runs processed ...", flush=True)

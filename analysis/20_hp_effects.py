@@ -17,6 +17,7 @@ Outputs:
     output/analysis/tables/rdm_hp_effects.csv
 """
 
+import argparse
 import json
 import sys
 from pathlib import Path
@@ -32,7 +33,7 @@ from scipy.stats import spearmanr
 
 ANALYSIS = Path(__file__).parent
 sys.path.insert(0, str(ANALYSIS))
-from analysis_utils import FIGURES_DIR, RDM_DIR, TABLES_DIR, TASK_NAMES, RL_TASKS
+from analysis_utils import FIGURES_DIR, RDM_DIR, TABLES_DIR, TASK_NAMES, RL_TASKS, metric_output_dirs
 
 TASK_DIR_OVERRIDES = {}
 RNN_TASKS          = {"adding", "mnist_rnn"}
@@ -65,10 +66,12 @@ CONT_LABELS = {
 # Levels must match the string representation stored in the DataFrame
 # (integer HPs stored as int → "1"/"2"; strings stored as-is).
 CAT_HPS_SUPERVISED = [
-    ("hp_optimizer",   "sgd",  "adam"),
-    ("hp_activation",  "relu", "tanh"),
-    ("hp_depth",       "1",    "2"),       # stored as int
-    ("hp_init_scale",  "0.1",  "1.0"),
+    ("hp_optimizer",   "sgd",    "adam"),
+    ("hp_activation",  "relu",   "sigmoid"),
+    ("hp_activation",  "sigmoid","tanh"),
+    ("hp_activation",  "tanh",   "relu"),
+    ("hp_depth",       "1",      "2"),       # stored as int
+    ("hp_init_scale",  "0.1",    "1.0"),
 ]
 CAT_HPS_RNN = [
     ("hp_optimizer",    "sgd",  "adam"),
@@ -77,12 +80,14 @@ CAT_HPS_RNN = [
     ("hp_init_scale",   "0.1",  "1.0"),
 ]
 CAT_LABELS = {
-    "hp_optimizer":    "optimizer\n(sgd→adam)",
-    "hp_activation":   "activation\n(relu→tanh)",
-    "hp_depth":        "depth\n(1→2)",
-    "hp_init_scale":   "init_scale\n(0.1→1.0)",
-    "hp_cell_type":    "cell_type\n(gru→rnn)",
-    "hp_n_rnn_layers": "n_rnn_layers\n(1→2)",
+    "hp_optimizer":                  "optimizer\n(sgd→adam)",
+    "hp_activation:relu/sigmoid":    "activation\n(relu→sig)",
+    "hp_activation:sigmoid/tanh":    "activation\n(sig→tanh)",
+    "hp_activation:tanh/relu":       "activation\n(tanh→relu)",
+    "hp_depth":                      "depth\n(1→2)",
+    "hp_init_scale":                 "init_scale\n(0.1→1.0)",
+    "hp_cell_type":                  "cell_type\n(gru→rnn)",
+    "hp_n_rnn_layers":               "n_rnn_layers\n(1→2)",
 }
 
 RDM_PROPS    = ["reliability", "category_corr", "dimensionality", "mean_dissimilarity"]
@@ -149,14 +154,15 @@ def _adding_sum_model():
     return np.abs(targets[ri] - targets[ci])
 
 
-def load_per_network_stats(thresholds):
+def load_per_network_stats(thresholds, metric="cosine"):
     """
     For each successful primary network, load:
       HPs, reliability, category_corr, dimensionality, mean_dissimilarity.
     Returns: dict task -> DataFrame.
     """
-    nc_df  = pd.read_csv(TABLES_DIR / "rdm_noise_ceiling.csv")
-    cat_df = pd.read_csv(TABLES_DIR / "rdm_category_structure.csv")
+    _, metric_tables = metric_output_dirs(metric)
+    nc_df  = pd.read_csv(metric_tables / "rdm_noise_ceiling.csv")
+    cat_df = pd.read_csv(metric_tables / "rdm_category_structure.csv")
     dim_df = pd.read_csv(TABLES_DIR / "rdm_dimensionality.csv")
 
     # Build lookup dicts: (task, run_id) -> value
@@ -203,15 +209,22 @@ def load_per_network_stats(thresholds):
 
                 # Last hidden layer key
                 if is_rnn:
-                    parsed = [(int(k.split("_")[1]), int(k.split("_t_")[1]))
-                              for k in cg.keys() if "_t_" in k]
+                    parsed = []
+                    for k in cg.keys():
+                        if "_t_" not in k:
+                            continue
+                        parts = k.split("_")
+                        try:
+                            parsed.append((int(parts[1]), int(parts[3])))
+                        except (IndexError, ValueError):
+                            pass
                     if not parsed:
                         continue
                     max_l = max(p[0] for p in parsed)
                     max_t = max(p[1] for p in parsed if p[0] == max_l)
-                    lkey  = f"layer_{max_l}_t_{max_t}"
+                    lkey  = f"layer_{max_l}_t_{max_t}_{metric}"
                 else:
-                    lkey = f"layer_{max(0, depth - 1)}"
+                    lkey = f"layer_{max(0, depth - 1)}_{metric}"
 
                 ds = cg.get(lkey)
                 if ds is None or ds.attrs.get("degenerate", False) or len(ds) == 0:
@@ -251,6 +264,13 @@ def load_per_network_stats(thresholds):
 # ---------------------------------------------------------------------------
 # Effect size computation
 # ---------------------------------------------------------------------------
+
+def _hp_key(hp_attr, lev_a, lev_b, cat_hps):
+    """Unique key for a categorical HP comparison. Uses composite form when the
+    same attribute appears more than once in the list (e.g. three activation pairs)."""
+    if sum(1 for h, _, _ in cat_hps if h == hp_attr) > 1:
+        return f"{hp_attr}:{lev_a}/{lev_b}"
+    return hp_attr
 
 def spearman_r(x, y):
     mask = np.isfinite(x) & np.isfinite(y)
@@ -310,8 +330,9 @@ def compute_effects(df, task):
         for hp_attr, lev_a, lev_b in cat_hps:
             if hp_attr not in df.columns:
                 continue
+            hp_key = _hp_key(hp_attr, lev_a, lev_b, cat_hps)
             e = signed_eta(df, hp_attr, lev_a, lev_b, prop)
-            rows.append({"task": task, "hp": hp_attr, "hp_type": "categorical",
+            rows.append({"task": task, "hp": hp_key, "hp_type": "categorical",
                          "level_a": lev_a, "level_b": lev_b,
                          "rdm_prop": prop, "effect": e})
 
@@ -324,9 +345,10 @@ def compute_effects(df, task):
 
 def hp_row_order(task):
     is_rnn = task in RNN_TASKS
+    cat_hps = CAT_HPS_RNN if is_rnn else CAT_HPS_SUPERVISED
     cont = [h for h in CONT_HPS
             if not (h == "hp_batch_size" and task in RL_TASKS)]
-    cat  = [h for h, _, _ in (CAT_HPS_RNN if is_rnn else CAT_HPS_SUPERVISED)]
+    cat  = [_hp_key(h, la, lb, cat_hps) for h, la, lb in cat_hps]
     return cont + cat
 
 
@@ -480,13 +502,19 @@ def make_figure(effects_df, task_dfs):
 # ---------------------------------------------------------------------------
 
 def main():
-    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
-    TABLES_DIR.mkdir(parents=True, exist_ok=True)
+    parser = argparse.ArgumentParser(description="HP effects on RDM properties.")
+    parser.add_argument("--metric", choices=["cosine", "pearson"], default="cosine",
+                        help="RDM metric to use (default: cosine).")
+    args = parser.parse_args()
+
+    out_figures, out_tables = metric_output_dirs(args.metric)
+    out_figures.mkdir(parents=True, exist_ok=True)
+    out_tables.mkdir(parents=True, exist_ok=True)
 
     thresholds = load_thresholds()
 
     print("Loading per-network stats ...")
-    task_dfs = load_per_network_stats(thresholds)
+    task_dfs = load_per_network_stats(thresholds, metric=args.metric)
 
     print("\nComputing HP effects ...")
     all_effects = []
@@ -498,14 +526,14 @@ def main():
     effects_df = pd.DataFrame(all_effects)
 
     # Save
-    csv_path = TABLES_DIR / "rdm_hp_effects.csv"
+    csv_path = out_tables / "rdm_hp_effects.csv"
     effects_df.to_csv(csv_path, index=False)
     print(f"\nSaved: {csv_path}")
 
     # Figure
     fig = make_figure(effects_df, task_dfs)
     if fig:
-        out = FIGURES_DIR / "f2_hp_effects.pdf"
+        out = out_figures / "f2_hp_effects.pdf"
         fig.savefig(out, bbox_inches="tight", dpi=150)
         plt.close(fig)
         print(f"Saved: {out}")

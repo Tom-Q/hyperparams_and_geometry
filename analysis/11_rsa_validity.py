@@ -35,6 +35,7 @@ ANALYSIS = Path(__file__).parent
 sys.path.insert(0, str(ANALYSIS))
 from analysis_utils import (
     DATASET_DIR, FIGURES_DIR, RDM_DIR, TABLES_DIR, TASK_NAMES, RL_TASKS,
+    metric_output_dirs,
 )
 
 TASK_DIR_OVERRIDES = {}
@@ -79,11 +80,11 @@ def get_ckpt_name(task):
     return "final" if task in RL_TASKS else "best"
 
 
-def get_last_layer_key(ckpt_grp, task, depth):
+def get_last_layer_key(ckpt_grp, task, depth, metric="cosine"):
     """Key for the primary RDM in a checkpoint group."""
     if task in RNN_TASKS:
-        return "temporal"
-    return f"layer_{max(0, int(depth) - 1)}"
+        return f"temporal_{metric}"
+    return f"layer_{max(0, int(depth) - 1)}_{metric}"
 
 
 def load_rdm_vec(ckpt_grp, key):
@@ -109,7 +110,7 @@ def load_bo_repeat_pairs(task):
     return pairs
 
 
-def load_task(task, success_threshold=None):
+def load_task(task, success_threshold=None, metric="cosine"):
     """
     Load RDMs from HDF5 for one task.
 
@@ -141,7 +142,7 @@ def load_task(task, success_threshold=None):
             ckpt_grp = rg.get(ckpt)
             if ckpt_grp is None:
                 continue
-            key = get_last_layer_key(ckpt_grp, task, depth)
+            key = get_last_layer_key(ckpt_grp, task, depth, metric=metric)
             if key is None:
                 continue
             rdm = load_rdm_vec(ckpt_grp, key)
@@ -351,10 +352,13 @@ def main():
     parser = argparse.ArgumentParser(description="RSA validity — noise ceiling and variance decomposition.")
     parser.add_argument("--task", nargs="+", default=None,
                         help="Tasks to process (default: all).")
+    parser.add_argument("--metric", choices=["cosine", "pearson"], default="cosine",
+                        help="RDM metric to use (default: cosine).")
     args = parser.parse_args()
 
-    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
-    TABLES_DIR.mkdir(parents=True, exist_ok=True)
+    out_figures, out_tables = metric_output_dirs(args.metric)
+    out_figures.mkdir(parents=True, exist_ok=True)
+    out_tables.mkdir(parents=True, exist_ok=True)
 
     thresholds = load_thresholds()
     if thresholds:
@@ -376,7 +380,7 @@ def main():
             continue
 
         threshold = thresholds.get(task)
-        primary_rdms, all_primary, within_pairs, run_perf = load_task(task, threshold)
+        primary_rdms, all_primary, within_pairs, run_perf = load_task(task, threshold, metric=args.metric)
 
         # --- 1.1 Noise ceiling ---
         if len(primary_rdms) < 3:
@@ -421,25 +425,25 @@ def main():
             var_rows.append({"task": task, "pair_type": "between_config", "spearman_r": float(r)})
 
     # --- Save tables ---
-    nc_csv = TABLES_DIR / "rdm_noise_ceiling.csv"
+    nc_csv = out_tables / "rdm_noise_ceiling.csv"
     pd.DataFrame(nc_rows).to_csv(nc_csv, index=False)
     print(f"\nSaved: {nc_csv}")
 
-    var_csv = TABLES_DIR / "rdm_variance.csv"
+    var_csv = out_tables / "rdm_variance.csv"
     pd.DataFrame(var_rows).to_csv(var_csv, index=False)
     print(f"Saved: {var_csv}")
 
     # --- Save figures ---
     if nc_results:
         fig_nc = plot_noise_ceiling(nc_results, thresholds)
-        out_nc = FIGURES_DIR / "f1_noise_ceiling.pdf"
+        out_nc = out_figures / "f1_noise_ceiling.pdf"
         fig_nc.savefig(out_nc, bbox_inches="tight")
         plt.close(fig_nc)
         print(f"Saved: {out_nc}")
 
     if var_results:
         fig_var = plot_variance_decomp(var_results)
-        out_var = FIGURES_DIR / "f1_variance_decomposition.pdf"
+        out_var = out_figures / "f1_variance_decomposition.pdf"
         fig_var.savefig(out_var, bbox_inches="tight")
         plt.close(fig_var)
         print(f"Saved: {out_var}")
