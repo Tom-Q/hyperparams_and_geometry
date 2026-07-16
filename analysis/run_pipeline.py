@@ -50,6 +50,7 @@ METRIC_SCRIPTS = [
     "21_latent_vars.py",
     "22_rdm_pca.py",
     "23_cca.py",
+    "24_layer_comparison.py",
 ]
 
 
