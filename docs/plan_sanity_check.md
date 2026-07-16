@@ -222,6 +222,37 @@ the categorical axis with one panel per categorical level rather than a heatmap.
 
 ---
 
+## Step 8 — HP-space UMAP
+
+**Script**: `analysis/08_hp_umap.py`
+**Output**: `output/analysis/figures/sc_hp_umap.pdf`, `output/analysis/tables/sc_hp_umap_coords.csv`
+
+Embed all primary networks (successful **and** failed) in 2D using UMAP on their
+HP configurations. This gives a holistic view of where BO explored and where
+successful networks cluster in HP space, complementing the marginal and joint
+coverage counts in Steps 4–6.
+
+**Feature matrix** (Euclidean metric — no precomputed distance matrix):
+- Continuous: `unit_{hp}` columns, already log-normalised to [0,1] by the BO
+  sampler.
+- Categorical: one-hot encoding (all levels kept), so each level is a 0/1
+  column also in [0,1]. Euclidean distance contributions are naturally balanced.
+
+**Colour panels** (one page per task, 3-column grid):
+- Each continuous HP — viridis colormap, log scale for lr / l1_reg / l2_reg,
+  linear for hidden_size / batch_size.
+- Each categorical HP — discrete colours (same palette as scripts 22–25).
+- Performance — plasma colormap (continuous).
+- Success vs. failure — blue = success (≥ task threshold), orange-red = failure.
+
+**Interpretation**: unlike the RDM-space UMAP (script 25) which shows which
+networks learn *similar representations*, this HP-space UMAP shows which
+networks have *similar configurations*. If successful networks cluster tightly,
+the task is HP-sensitive; if they are spread across the embedding, success is
+robust to HP choice.
+
+---
+
 ## Output file summary
 
 ```
@@ -240,6 +271,11 @@ analysis/
     marginal_coverage.pdf          # Step 4
     concentration_lorenz.pdf       # Step 6
     heatmaps_{task}.pdf            # Step 7 (9 files)
+output/analysis/
+  figures/
+    sc_hp_umap.pdf                 # Step 8
+  tables/
+    sc_hp_umap_coords.csv          # Step 8
   load_data.py                     # shared module, imported by all scripts
   01_disk_inventory.py
   02_performance_lorenz.py
@@ -248,6 +284,7 @@ analysis/
   05_joint_coverage.py
   06_concentration_lorenz.py
   07_heatmaps.py
+  08_hp_umap.py
 ```
 
 ---
@@ -255,7 +292,7 @@ analysis/
 ## Execution order
 
 Steps 0–2 must run before the rest. Step 2 requires manual inspection before
-proceeding. Steps 3–7 can then run in any order (all read from the parquet cache
+proceeding. Steps 3–8 can then run in any order (all read from the parquet cache
 and `success_thresholds.json`).
 
 ```
@@ -268,4 +305,5 @@ python analysis/04_marginal_coverage.py
 python analysis/05_joint_coverage.py
 python analysis/06_concentration_lorenz.py
 python analysis/07_heatmaps.py
+python analysis/08_hp_umap.py
 ```
