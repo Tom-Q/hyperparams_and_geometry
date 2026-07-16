@@ -51,6 +51,7 @@ METRIC_SCRIPTS = [
     "22_rdm_pca.py",
     "23_cca.py",
     "24_layer_comparison.py",
+    "25_umap.py",
 ]
 
 
