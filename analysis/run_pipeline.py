@@ -17,6 +17,7 @@ Runs all analysis scripts in order:
     20  → HP effects
     21  → Latent variable analysis
     22  → PCA on RDMs
+    23  → CCA (composites and individual HPs)
 
 Usage:
     python run_pipeline.py                     # cosine only
@@ -48,6 +49,7 @@ METRIC_SCRIPTS = [
     "20_hp_effects.py",
     "21_latent_vars.py",
     "22_rdm_pca.py",
+    "23_cca.py",
 ]
 
 
