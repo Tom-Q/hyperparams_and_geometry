@@ -2,15 +2,16 @@
 """
 Step 24: Layer comparison for HP effects — Finding #2.5.
 
-For depth=2 networks: repeat the direct HP effects analysis (script 20)
-separately for layer_0 (first hidden layer, H units) and layer_1 (second
-hidden layer, H//2 units).  Shows whether HP effects shift between layers.
+Three-way comparison across depth groups:
+  (A) depth=1 networks → layer_0  (their only layer)
+  (B) depth=2 networks → layer_0  (first hidden, H units)
+  (C) depth=2 networks → layer_1  (second hidden, H//2 units)
 
 RNN tasks are excluded (they use n_rnn_layers, not depth).
-hp_depth is excluded as a predictor (all networks here have depth=2).
+hp_depth is excluded as a predictor within each group (fixed per group).
 
 RDM properties computed per layer from HDF5:
-  reliability       : LOO Spearman r with group-mean RDM (depth=2 networks)
+  reliability       : LOO Spearman r with group-mean RDM (within each group)
   category_corr     : Spearman r with primary category model (from cache)
   mean_dissimilarity: mean of upper triangle
 
@@ -161,17 +162,20 @@ def loo_spearman(mat):
 # Data loading
 # ---------------------------------------------------------------------------
 
-def load_task_layers(task, threshold, metric="cosine"):
+def load_all_depth_layers(task, threshold, metric="cosine"):
     """
-    Load layer_0 and layer_1 RDM vectors + HPs for depth=2 successful primaries.
-    Returns list of dicts with keys: run_id, hp_*, layer_0_vec, layer_1_vec.
+    Single HDF5 pass: collect layer RDMs for all successful primaries.
+    Returns three lists of row-dicts (each with run_id, hp_*, vec):
+      d1_rows   — depth=1, layer_0
+      d2l0_rows — depth=2, layer_0
+      d2l1_rows — depth=2, layer_1
     """
     h5_path = RDM_DIR / f"{task}_rdms.h5"
     if not h5_path.exists():
-        return []
+        return [], [], []
 
     ckpt = "final" if task in RL_TASKS else "best"
-    rows = []
+    d1, d2l0, d2l1 = [], [], []
 
     with h5py.File(h5_path, "r") as h5:
         runs_grp = h5.get("runs", {})
@@ -183,74 +187,74 @@ def load_task_layers(task, threshold, metric="cosine"):
             if threshold is not None and perf < threshold:
                 continue
             depth = int(rg.attrs.get("hp_depth", 1))
-            if depth != 2:
+            if depth not in (1, 2):
                 continue
 
             cg = rg.get(ckpt)
             if cg is None:
                 continue
 
+            def _load_vec(key):
+                if key not in cg:
+                    return None
+                ds = cg[key]
+                if ds.attrs.get("degenerate", False) or len(ds) == 0:
+                    return None
+                v = ds[:].astype(np.float32)
+                if not np.all(np.isfinite(v)):
+                    raise ValueError(f"{task}/{run_id}/{key}: NaN in RDM")
+                return v
+
             k0 = f"layer_0_{metric}"
             k1 = f"layer_1_{metric}"
-            if k0 not in cg or k1 not in cg:
-                continue
-
-            ds0, ds1 = cg[k0], cg[k1]
-            if (ds0.attrs.get("degenerate", False) or len(ds0) == 0 or
-                    ds1.attrs.get("degenerate", False) or len(ds1) == 0):
-                continue
-
-            vec0 = ds0[:].astype(np.float32)
-            vec1 = ds1[:].astype(np.float32)
-
-            if not np.all(np.isfinite(vec0)) or not np.all(np.isfinite(vec1)):
-                raise ValueError(f"{task}/{run_id}: NaN in layer RDM")
-
-            row = {"run_id": run_id, "performance": perf,
-                   "layer_0_vec": vec0, "layer_1_vec": vec1}
+            hp = {"run_id": run_id, "performance": perf}
             for k, v in rg.attrs.items():
                 if k.startswith("hp_"):
-                    row[k] = _hp_val(v)
-            rows.append(row)
+                    hp[k] = _hp_val(v)
 
-    return rows
+            if depth == 1:
+                v0 = _load_vec(k0)
+                if v0 is not None:
+                    d1.append({**hp, "vec": v0})
+            else:
+                v0 = _load_vec(k0)
+                v1 = _load_vec(k1)
+                if v0 is not None:
+                    d2l0.append({**hp, "vec": v0})
+                if v1 is not None:
+                    d2l1.append({**hp, "vec": v1})
+
+    return d1, d2l0, d2l1
 
 
-def build_layer_df(rows, task):
+def build_df(rows, task, depth_label, layer_idx):
     """
-    Given loaded rows, compute per-network RDM properties for each layer.
-    Returns DataFrames (df_layer0, df_layer1).
+    Compute per-network RDM properties for one group of rows.
+    Each row must have 'vec' key with the RDM upper-triangle vector.
     """
     if not rows:
-        return None, None
+        return None
 
     cat_vec = load_cat_model_vec(task)
+    mat = np.vstack([r["vec"] for r in rows])
+    rel = loo_spearman(mat)
 
-    mat0 = np.vstack([r["layer_0_vec"] for r in rows])
-    mat1 = np.vstack([r["layer_1_vec"] for r in rows])
+    records = []
+    for i, row in enumerate(rows):
+        rec = {k: v for k, v in row.items() if k != "vec"}
+        rec["task"]        = task
+        rec["depth_label"] = depth_label
+        rec["layer"]       = layer_idx
+        rec["reliability"] = float(rel[i])
+        rec["mean_dissimilarity"] = float(mat[i].mean())
+        if cat_vec is not None:
+            r, _ = spearmanr(mat[i], cat_vec)
+            rec["category_corr"] = float(r)
+        else:
+            rec["category_corr"] = np.nan
+        records.append(rec)
 
-    rel0 = loo_spearman(mat0)
-    rel1 = loo_spearman(mat1)
-
-    dfs = []
-    for layer_idx, (mat, rel) in enumerate([(mat0, rel0), (mat1, rel1)]):
-        records = []
-        for i, row in enumerate(rows):
-            rec = {k: v for k, v in row.items()
-                   if k not in ("layer_0_vec", "layer_1_vec")}
-            rec["layer"] = layer_idx
-            rec["task"]  = task
-            rec["reliability"] = float(rel[i])
-            rec["mean_dissimilarity"] = float(mat[i].mean())
-            if cat_vec is not None:
-                r, _ = spearmanr(mat[i], cat_vec)
-                rec["category_corr"] = float(r)
-            else:
-                rec["category_corr"] = np.nan
-            records.append(rec)
-        dfs.append(pd.DataFrame(records))
-
-    return dfs[0], dfs[1]
+    return pd.DataFrame(records)
 
 
 # ---------------------------------------------------------------------------
@@ -427,51 +431,61 @@ def main():
 
     thresholds = load_thresholds()
 
-    print("Loading depth=2 networks ...")
-    layer0_effects, layer1_effects = {}, {}
+    print("Loading networks (depth=1 and depth=2) ...")
+    # Three groups: (effects_dict, page_label, depth_label, layer_idx)
+    groups = [
+        ({}, "depth=1, layer_0  (only layer)",    "d1",  0),
+        ({}, "depth=2, layer_0  (first hidden)",  "d2l0", 0),
+        ({}, "depth=2, layer_1  (second hidden)", "d2l1", 1),
+    ]
     all_csv_rows = []
 
     for task in LAYER_TASKS:
-        rows = load_task_layers(task, thresholds.get(task), metric=args.metric)
-        if not rows:
-            print(f"  [skip] {task}: no depth=2 networks")
+        d1_rows, d2l0_rows, d2l1_rows = load_all_depth_layers(
+            task, thresholds.get(task), metric=args.metric)
+
+        parts = [
+            (d1_rows,   "d1",   0, groups[0][0]),
+            (d2l0_rows, "d2l0", 0, groups[1][0]),
+            (d2l1_rows, "d2l1", 1, groups[2][0]),
+        ]
+        n_parts = [len(r) for r, *_ in parts]
+        if not any(n_parts):
+            print(f"  [skip] {task}: no networks loaded")
             continue
 
-        df0, df1 = build_layer_df(rows, task)
-        if df0 is None:
-            continue
+        rel_means = []
+        for rows, depth_label, layer_idx, effects_dict in parts:
+            df = build_df(rows, task, depth_label, layer_idx)
+            if df is None or len(df) < 10:
+                rel_means.append(f"{depth_label}=—")
+                continue
+            rel_means.append(f"{depth_label}={df['reliability'].mean():.3f}")
+            eff = pd.DataFrame(compute_effects(df, task))
+            if len(eff):
+                effects_dict[task] = eff
+            for _, row in eff.iterrows():
+                all_csv_rows.append({**row, "task": task,
+                                     "depth_label": depth_label, "layer": layer_idx})
 
-        n = len(df0)
-        r0_mean = df0["reliability"].mean()
-        r1_mean = df1["reliability"].mean()
-        print(f"  {task}: {n} networks  "
-              f"LOO r: layer_0={r0_mean:.3f}  layer_1={r1_mean:.3f}")
+        print(f"  {task}: N={n_parts}  LOO r: {',  '.join(rel_means)}")
 
-        eff0 = pd.DataFrame(compute_effects(df0, task))
-        eff1 = pd.DataFrame(compute_effects(df1, task))
-
-        if len(eff0) and len(eff1):
-            layer0_effects[task] = eff0
-            layer1_effects[task] = eff1
-
-        for _, row in eff0.iterrows():
-            all_csv_rows.append({**row, "task": task, "layer": 0})
-        for _, row in eff1.iterrows():
-            all_csv_rows.append({**row, "task": task, "layer": 1})
-
-    # Shared color scale across both layers
-    all_effects = [v for d in (layer0_effects, layer1_effects) for v in d.values()]
+    # Shared colour scale across all three groups
+    all_eff_dfs = [df for ed, *_ in groups for df in ed.values()]
+    if not all_eff_dfs:
+        print("No effects computed — nothing to plot.")
+        return
     vmax_global = max(0.3, round(
-        max(np.nanmax(np.abs(df["effect"].values)) for df in all_effects), 1
+        max(np.nanmax(np.abs(df["effect"].values)) for df in all_eff_dfs), 1
     ))
-
     print(f"\nGlobal |effect| max: {vmax_global:.2f}")
 
     pdf_path = out_figures / "f2_layer_comparison.pdf"
     with PdfPages(pdf_path) as pdf:
-        for effects, label in [(layer0_effects, "layer_0 (first hidden)"),
-                               (layer1_effects, "layer_1 (second hidden)")]:
-            fig = make_layer_figure(effects, label, vmax_global)
+        for effects_dict, label, *_ in groups:
+            if not effects_dict:
+                continue
+            fig = make_layer_figure(effects_dict, label, vmax_global)
             pdf.savefig(fig, bbox_inches="tight")
             plt.close(fig)
 
