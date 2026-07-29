@@ -51,18 +51,21 @@ def train_network(task, config, run_dir, rdm_inputs, ds_train=None, ds_val=None,
     val_loader   = make_loader(ds_val,   batch_size=512,        shuffle=False)
 
     multiclass = task.output_size > 1
-    model = MLP(
-        input_size  = task.input_size,
-        output_size = task.output_size,
-        hidden_size = int(config["hidden_size"]),
-        depth       = int(config["depth"]),
-        activation  = config["activation"],
-        init_scale  = float(config["init_scale"]),
-    ).to(device)
+    model = task.build_model(config)
+    if model is None:
+        model = MLP(
+            input_size  = task.input_size,
+            output_size = task.output_size,
+            hidden_size = int(config["hidden_size"]),
+            depth       = int(config["depth"]),
+            activation  = config["activation"],
+            init_scale  = float(config["init_scale"]),
+        )
+    model = model.to(device)
 
     optimizer  = make_optimizer(model, config)
     criterion  = task.make_loss()
-    l1_coef    = config["l1_reg"]
+    l1_coef    = config.get("l1_reg", 0.0)
     stimuli_t  = stimuli_to_tensor(rdm_inputs)
 
     steps_per_epoch   = math.ceil(len(ds_train) / batch_size)
@@ -138,8 +141,7 @@ def train_network(task, config, run_dir, rdm_inputs, ds_train=None, ds_val=None,
                         save_activations_mlp(model, stimuli_t, run_dir / f"perf_{label}", device)
                         perf_crossed.add(label)
 
-        # Early stopping (by val_loss): patience only counts within PATIENCE epochs of MIN_EPOCHS,
-        # so exhausted patience never pre-decides a stop before MIN_EPOCHS is reached.
+        # Early stopping (by val_loss)
         if val_loss < best_val_loss * (1 - EARLY_STOP_THRESHOLD):
             best_val_loss = val_loss
             no_improve    = 0

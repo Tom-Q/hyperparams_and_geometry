@@ -3,7 +3,7 @@ import torch
 
 MIN_EPOCHS              = 10
 MAX_EPOCHS              = 100
-EARLY_STOP_PATIENCE     = 5
+EARLY_STOP_PATIENCE     = 8
 EARLY_STOP_THRESHOLD    = 0.0001  # relative: val_loss must improve by ≥0.01% to reset patience
 
 EPOCH_CKPT_VALUES = [0.25, 1, 4, 16, 64]
@@ -54,7 +54,7 @@ def perf_checkpoint_thresholds(chance_perf, max_metric):
 def make_optimizer(model, config):
     lr  = config["learning_rate"]
     l2  = config["l2_reg"]
-    opt = config["optimizer"].lower()
+    opt = config.get("optimizer", "adam").lower()
     if opt == "sgd":
         return torch.optim.SGD(model.parameters(), lr=lr, momentum=0.9, weight_decay=l2)
     elif opt == "adam":

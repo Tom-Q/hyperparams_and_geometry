@@ -259,7 +259,8 @@ def main():
         cont_str = (f"lr={config['learning_rate']:.2e}  "
                     f"h={int(config['hidden_size'])}  "
                     + (f"bs={int(config['batch_size'])}  " if "batch_size" in config else "")
-                    + f"l1={config['l1_reg']:.2e}  l2={config['l2_reg']:.2e}")
+                    + (f"l1={config['l1_reg']:.2e}  " if "l1_reg" in config else "")
+                    + f"l2={config['l2_reg']:.2e}")
         print(f"  >> {cat_str}  |  {cont_str}  |  perf={val_acc:.4f} [{flag}]  ({elapsed_net:.0f}s)",
               flush=True)
 

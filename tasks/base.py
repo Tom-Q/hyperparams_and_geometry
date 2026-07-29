@@ -34,3 +34,11 @@ class Task(ABC):
     def make_loss(self):
         """Return the PyTorch loss function for this task (supervised/RNN only)."""
         raise NotImplementedError(f"{self.name} has no make_loss()")
+
+    def build_model(self, config):
+        """Return a model instance for this config, or None to use the default MLP."""
+        return None
+
+    def cont_param_ranges(self):
+        """Return [(name, lo, hi), ...] to override global continuous BO ranges, or None for defaults."""
+        return None

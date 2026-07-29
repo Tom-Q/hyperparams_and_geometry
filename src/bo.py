@@ -36,7 +36,7 @@ N_SOBOL = 200
 CONT_FROM_CAT = {"hidden_size", "batch_size"}
 
 # Remaining ordinal categoricals (numeric, log-scale ordering in N_eff).
-ORDINAL_PARAMS = {"depth", "n_rnn_layers"}
+ORDINAL_PARAMS = {"depth", "n_rnn_layers", "n_fc_layers"}
 
 
 # ---------------------------------------------------------------------------
@@ -46,14 +46,20 @@ ORDINAL_PARAMS = {"depth", "n_rnn_layers"}
 def _cont_params_for_task(task):
     """Return list of (name, raw_lo, raw_hi) for continuous dims.
 
-    Includes learning_rate, l1_reg, l2_reg, plus any CONT_FROM_CAT params
-    present in the task's categorical_space (hidden_size, batch_size).
+    If task.cont_param_ranges() returns a list, use that; otherwise fall back
+    to the global defaults (learning_rate, l1_reg, l2_reg). In both cases,
+    CONT_FROM_CAT params (hidden_size, batch_size) are appended from the task's
+    categorical_space.
     """
-    params = [
-        ("learning_rate", *LEARNING_RATE),
-        ("l1_reg",        *L1_REG),
-        ("l2_reg",        *L2_REG),
-    ]
+    override = task.cont_param_ranges()
+    if override is not None:
+        params = list(override)
+    else:
+        params = [
+            ("learning_rate", *LEARNING_RATE),
+            ("l1_reg",        *L1_REG),
+            ("l2_reg",        *L2_REG),
+        ]
     cat_space = task.categorical_space()
     if "hidden_size" in cat_space:
         choices = cat_space["hidden_size"]
