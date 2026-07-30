@@ -63,7 +63,15 @@ def spearman_finite(a, b):
     return float(spearmanr(a[mask], b[mask]).statistic)
 
 
-def process_network(run_dir, task, cutoff_fraction):
+def load_bo_perf(task):
+    """Return {run_id: performance} from bo_state.json (canonical source)."""
+    state_path = PROD_DIR / task / "bo_state.json"
+    observations = json.load(open(state_path))
+    return {f"run_{obs['iteration']:04d}_r0": obs["performance"]
+            for obs in observations}
+
+
+def process_network(run_dir, task, cutoff_fraction, bo_perf):
     meta_path = run_dir / "metadata.json"
     if not meta_path.exists():
         return None
@@ -100,18 +108,13 @@ def process_network(run_dir, task, cutoff_fraction):
     if not rs:
         return None
 
-    if task in RL_TASKS:
-        perf = meta.get("best_rolling", float("nan"))
-    else:
-        perf = meta.get("best_metric", float("nan"))
-
     return {
         "task":           task,
         "run_id":         run_dir.name,
         "final_step":     final_step,
         "n_ckpts_window": len(rs),
         "min_spearman_r": round(min(rs), 6),
-        "performance":    perf,
+        "performance":    bo_perf.get(run_dir.name, float("nan")),
     }
 
 
@@ -194,8 +197,9 @@ def main():
         rows = []
         for task, run_dirs in task_run_dirs.items():
             print(f"  {task} ...", flush=True)
+            bo_perf = load_bo_perf(task)
             for run_dir in run_dirs:
-                result = process_network(run_dir, task, cutoff_fraction)
+                result = process_network(run_dir, task, cutoff_fraction, bo_perf)
                 if result is not None:
                     rows.append(result)
 

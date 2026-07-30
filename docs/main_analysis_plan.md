@@ -24,6 +24,31 @@ The 6 phases (0-indexed): 0 = before flag1, 1 = at flag1, 2 = between flags, 3 =
 
 Both are stored under HDF5 key `temporal` (written by scripts 10b and 10c respectively), replacing the old `layer_{L}_t_{T}` key lookup for all main analyses. The per-timestep keys remain in the HDF5 for the temporal-dynamics sub-analysis (script 11b).
 
+### Canonical performance field and success classification
+
+**Always use `obs["performance"]` from `bo_state.json`** — never `best_metric` or `best_rolling` from `metadata.json`.
+
+The thresholds in `success_thresholds.json` were computed from `obs["performance"]`. This field is the raw BO metric, which is consistent across tasks in sign convention (higher = better for the GP):
+
+- Supervised tasks: `obs["performance"]` = validation accuracy (same as `best_metric` in metadata — those two happen to agree, but use the BO state as the source of truth anyway)
+- RL tasks (`cartpole`, `fourrooms`): `obs["performance"]` = rolling mean return
+- Adding: `obs["performance"]` = **negative MSE** (`train_rnn` negates MSE before returning it to the BO). `metadata.json` stores raw positive MSE as `best_metric` — a different quantity. Using `best_metric` directly gives wrong sign and breaks the threshold comparison entirely.
+
+**Loading pattern** (use this in every analysis script that needs performance):
+```python
+def load_bo_perf(task):
+    state_path = PROD_DIR / task / "bo_state.json"
+    observations = json.load(open(state_path))
+    return {f"run_{obs['iteration']:04d}_r0": obs["performance"]
+            for obs in observations}
+```
+Run dir names follow the format `run_{iteration:04d}_r0` (zero-padded iteration, `_r0` suffix for the primary repetition).
+
+**Success classification:**
+- successful: `performance >= success_thresholds.json[task]["upper"]`
+- near-chance: `performance <= success_thresholds.json[task]["lower"]`
+- partial: between the two
+
 ### Network selection
 - All analyses in Finding #1 use **primary networks only** (no repeats), across all performance categories unless specified.
 - Finding #2 uses **successful networks only** (performance ≥ upper threshold) to ensure HP effects on representations aren't confounded by learning failure.
@@ -191,47 +216,61 @@ Compute pairwise RDM-to-RDM distance (1 − Spearman correlation between flatten
 
 ## Finding #3 — Representations over the course of learning
 
-**Checkpoints used:**
-- 3.1, 3.4: performance checkpoints (`perf_X.npz`) — aligned by normalised performance level, so networks can be compared "at the same stage of learning" regardless of speed.
-- 3.2: step checkpoints (`step_XXXXXXX.npz`) — aligned by gradient update count, dense early in training.
-- 3.3: `best.npz` vs `final.npz` — peak vs. end-of-training weights.
+The analyses in this section ask how representational geometry changes during training — when it forms, how fast it changes, whether it survives past the performance peak, and whether different networks take similar routes through representational space. Together they characterise the coupling between learning dynamics and representational structure, which determines how much RSA conclusions depend on exactly when during training you capture the network.
+
+The checkpoint infrastructure provides three complementary time axes: step checkpoints (log₄-spaced gradient updates, dense early in training), performance checkpoints (saved when a running performance threshold is first crossed), and a best/final pair (peak-performance and end-of-training weights). Different analyses use different axes depending on what question they answer.
+
+The production analyses (scripts 31–37) were informed by a self-contained exploratory script (`30_explore_trajectories.py`) that applied RDM galleries, similarity curves, and 2D/3D trajectory plots to three representative tasks (mnist_10way, fourrooms, adding).
 
 ### 3.1 When does the representation crystallize?
-For each network, compute the correlation between the RDM at each performance checkpoint and the final RDM (`best.npz`). This gives a "similarity to final" curve over learning progress.
+`31_spearman_stability.py`, `32_crystallisation_time.py`
 
-The key question: does the representation reach its final form early (at perf=0.2, while performance is still rising) or late (at perf=0.8, tracking performance all the way up)? If representations crystallize before performance saturates, it suggests that geometric structure is established at the moment the network "gets it," and subsequent learning mostly refines the readout. This would be a strong statement about what drives representational geometry.
+**Question:** Does representational geometry stabilise well before training ends, or does it keep changing all the way through? If it crystallises early, then RDMs are a stable property of the network's solution and capturing them at any late-training point is valid. If it keeps drifting, then the specific checkpoint chosen matters.
 
-**Output:** one curve per network (similarity-to-final vs. performance checkpoint), with mean and confidence band per task. Summary: at what performance level does the mean similarity first exceed 0.9?
+**What we did:** Two complementary approaches, both measuring similarity between the last-hidden-layer geometry at each late-training step checkpoint and the geometry at the very end of training. Script 31 summarises this per network as the *minimum* Spearman r across checkpoints in the last N% of training (four window sizes: 1%, 5%, 10%, 25%), giving a single stability scalar whose distribution reveals how much residual drift remains. Script 32 asks a sharper question: at what point in training does similarity to the final checkpoint first reach ≥ 0.99 and *stay there*, giving a crystallisation time as a fraction of total training, shown as an ECDF split by successful vs. failed networks.
+
+- Scripts: `31_spearman_stability.py`, `32_crystallisation_time.py`
+- Output: `figures/spearman_stability_{window}.pdf`, `tables/spearman_stability_{window}.csv`; `figures/crystallisation_time.pdf`, `tables/crystallisation_time.csv`
 
 ### 3.2 Critical period — rate of representational change
-Using step checkpoints, compute the RDM-to-RDM correlation between each consecutive checkpoint pair for each network. Plot the *rate of change* (1 − correlation) over training steps.
+`33_critical_period.py`, `34_change_vs_performance.py`
 
-If change rate is highest in the first few hundred steps then drops off, the network has a critical period of high representational plasticity early in training. If it stays elevated until performance saturates, the representation is continuously driven by learning.
+**Question:** Is representational change concentrated in an early critical period of high plasticity, or is it distributed throughout training? A critical period would imply the network lays down its geometric structure in the first fraction of training updates and then largely refines the readout; distributed change would imply geometry and performance are continuously coupled.
 
-**Report separately by paradigm** (classification / RNN / RL), as learning dynamics differ substantially: RL trains online over 100k environment steps, RNNs process sequential inputs, supervised tasks have clean gradient signal from the start. Qualitatively different trajectories are expected.
+**What we did:** For every consecutive pair of checkpoints, we compute how much the geometry changed relative to the length of the interval — representational change per unit training time (script 33, time axis) or per unit performance gain (script 34, performance axis). Dividing by interval length is necessary to make change rates comparable across the uneven spacing of the checkpoint schedule: without normalisation, a large change over a long interval looks the same as a small change over a short one, obscuring where change is actually concentrated. The time-axis analysis uses all checkpoint types for which a step number is recoverable; the performance-axis analysis uses only performance checkpoints, which are available for all tasks including RL and are directly aligned to task difficulty. Results are grouped by paradigm (supervised / RNN / RL) since learning dynamics differ qualitatively across them.
 
-**Output:** mean change-rate curves per paradigm, plotted on log-scale time axis (matching the log₄ spacing of checkpoints). Separate panels per paradigm.
+- Scripts: `33_critical_period.py`, `34_change_vs_performance.py`
+- Output: `figures/critical_period.pdf`, `tables/critical_period.csv`; `figures/change_vs_performance.pdf`, `tables/change_vs_performance.csv`
 
 ### 3.3 Overfitting — does the representation degrade?
-For networks where final performance is meaningfully below peak (overfitting by > 5% normalised performance): compare the RDM at `best.npz` to the RDM at `final.npz`. How much did the representation change after the performance peak?
+`35_overfitting.py`
 
-Two possible outcomes, both interesting:
-- Representation degrades with performance → geometry is tightly coupled to task loss; overfitting corrupts it.
-- Representation stays stable despite performance drop → geometric structure is more robust than the readout; good news for RSA (representations don't require stopping at exactly the right moment).
+**Question:** Many networks continue training past their performance peak and overfit. When performance degrades after best, does the representational geometry degrade with it, or is the geometric structure more robust than the readout weights? The answer bears on how much the specific stopping point matters for RSA: if geometry survives overfitting, best-checkpoint and final-checkpoint RDMs are interchangeable; if it degrades, they are not.
 
-**Output:** scatter plot of (best-to-final performance drop) vs. (best-to-final RDM correlation), per task. Summary: mean RDM change for overfitting vs. non-overfitting networks.
+**What we did:** For each successful network where best and final are distinct training points, we measure the performance drop (normalised best minus final performance) and the representational change (1 − Spearman r between best and final activation matrices), then scatter the two against each other per task. A near-zero slope would indicate geometric robustness; a positive slope would indicate the representation tracks performance loss.
+
+- Script: `35_overfitting.py`
+- Output: `figures/overfitting.pdf`, `tables/overfitting.csv`
 
 ### 3.4 Trajectory mapping in representational space
-For a sample of networks per task (~100), take RDMs at every performance checkpoint reached. Compute pairwise RDM-to-RDM distances (1 − Spearman correlation of upper triangles) across all (network × checkpoint) pairs, then embed in 2D/3D.
+`36_trajectory_mds.py`
 
-Each point = one network at one performance level. Points from the same network are connected by lines, forming learning trajectories through representational space. Color by performance checkpoint level (so all "perf=0.1" points share a color regardless of which network).
+**Question:** Do different networks follow similar paths through representational space as they learn, or do they take qualitatively different routes to similar endpoints? Do successful networks converge toward a shared representational region, or remain dispersed? Convergence and parallel trajectories would suggest the task structure constrains the representational solution; divergence would point to a larger variety of valid solutions.
 
-Questions this visualization answers:
-- Do networks converge toward a common representational region as performance increases, or do they stay spread out?
-- Are learning trajectories roughly parallel (same path, different starting points) or do networks take qualitatively different routes to similar endpoints?
-- Are there "dead-end" regions — clusters of points where low-performing networks get stuck and never move toward the high-performance cluster?
+**What we did:** For each task, we jointly embed all step-checkpoint RDM vectors from up to ~300–500 successful networks in 2D via MDS on Spearman dissimilarity. Each network's checkpoints are connected in order, forming a trajectory, with a log-spaced colour gradient from light green (start) to black (end of training) so early and late training are visually distinct even when trajectories overlap. Using step checkpoints rather than performance checkpoints gives a denser and more evenly distributed time axis, and avoids the ambiguity of not knowing exactly when performance thresholds were crossed relative to each other. The embedding is computed jointly across all networks so the global geometry of trajectories — convergence, divergence, clustering — is directly visible.
 
-**Output:** 2D UMAP trajectory plot (static, for paper). 3D interactive trajectory plot using Plotly (for exploratory analysis). One figure per task.
+- Script: `36_trajectory_mds.py`
+- Output: `figures/trajectory_mds_{task}.pdf` (one per task, 9 total)
+
+### 3.5 RDM gallery through learning
+`37_rdm_gallery_thru_learning.py`
+
+**Question:** What does representational geometry actually look like at each stage of training, and how does it differ between successful and failed networks? The quantitative analyses in 3.1–3.4 summarise change in single numbers; the gallery provides the visual ground-truth that anchors those summaries and lets us check that the measures are capturing something meaningful.
+
+**What we did:** For each task, we display the RDM at every step checkpoint for 20 networks: 15 successful networks sampled to span the full performance range, and 5 failed networks chosen as the best-performing failures (closest to the success threshold, most informative for comparison). Best and final checkpoint RDMs are appended as additional columns where available, with the actual training step from `metadata.json` labelled on each cell. Rows run best-to-worst performance.
+
+- Script: `37_rdm_gallery_thru_learning.py`
+- Output: `figures/rdm_gallery_{task}.pdf` (one per task, 9 total)
 
 ---
 
@@ -318,11 +357,13 @@ Pre-trained open-source LLMs (e.g., Llama, Phi, Mistral) have accessible weights
 | UMAP of networks | `figures/f2_umap.pdf` |
 | Layer comparison for HP effects | `figures/f2_layer_hp_effects.pdf` |
 | Per-network RDM stats table | `tables/rdm_stats.csv` |
-| Crystallization curves | `figures/f3_crystallization.pdf` |
-| Critical period (change rate) | `figures/f3_critical_period.pdf` |
-| Overfitting RDM stability | `figures/f3_overfitting.pdf` |
-| Trajectory maps (2D) | `figures/f3_trajectories_{task}.pdf` |
-| Trajectory maps (3D interactive) | `figures/f3_trajectories_{task}.html` |
+| Spearman stability (late-window) | `figures/spearman_stability_{window}.pdf`, `tables/spearman_stability_{window}.csv` (script 31) |
+| Crystallisation time ECDF | `figures/crystallisation_time.pdf`, `tables/crystallisation_time.csv` (script 32) |
+| Critical period (change rate vs. time) | `figures/critical_period.pdf`, `tables/critical_period.csv` (script 33) |
+| Change rate vs. performance | `figures/change_vs_performance.pdf`, `tables/change_vs_performance.csv` (script 34) |
+| Overfitting RDM stability | `figures/overfitting.pdf`, `tables/overfitting.csv` (script 35) |
+| Trajectory MDS (per task) | `figures/trajectory_mds_{task}.pdf` — 9 files (script 36) |
+| RDM gallery through learning | `figures/rdm_gallery_{task}.pdf` — 9 files (script 37) |
 | Early prediction AUC curves | `figures/f4_early_prediction.pdf` |
 | RDM vs. loss prediction comparison | `figures/f4_rdm_vs_loss.pdf` |
 | Failed network trajectory analysis | `figures/f4_failed_networks.pdf` [very optional] |
