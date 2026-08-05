@@ -30,7 +30,7 @@ from sklearn.manifold import MDS
 ANALYSIS  = Path(__file__).parent
 REPO_ROOT = ANALYSIS.parent
 sys.path.insert(0, str(ANALYSIS))
-from analysis_utils import RDM_DIR, TABLES_DIR, FIGURES_DIR, RL_TASKS, TASK_NAMES
+from analysis_utils import RDM_DIR, TABLES_DIR, FIGURES_DIR, RL_TASKS, TASK_NAMES, get_depth
 
 RNN_TASKS = {"adding", "mnist_rnn"}
 N_NETS        = 500          # upper bound on networks; actual count also limited by MAX_POINTS
@@ -49,7 +49,7 @@ CMAP      = mcolors.LinearSegmentedColormap.from_list(
 def last_layer_key(task, rg):
     if task in RNN_TASKS:
         return f"temporal_{METRIC}"
-    depth = int(rg.attrs.get("hp_depth", 1))
+    depth = get_depth(rg)
     return f"layer_{depth - 1}_{METRIC}"
 
 

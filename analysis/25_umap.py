@@ -35,7 +35,7 @@ import umap
 
 ANALYSIS = Path(__file__).parent
 sys.path.insert(0, str(ANALYSIS))
-from analysis_utils import RDM_DIR, TASK_NAMES, RL_TASKS, metric_output_dirs
+from analysis_utils import RDM_DIR, TASK_NAMES, RL_TASKS, metric_output_dirs, get_depth
 
 RNN_TASKS = {"adding", "mnist_rnn"}
 NAN_TASKS = {"adding"}
@@ -48,6 +48,7 @@ TASK_SHORT = {
     "mnist_dual":    "MNIST dual",
     "mnist_10way":   "MNIST 10-way",
     "fashion_10way": "Fashion 10-way",
+    "cifar10":       "CIFAR-10",
     "spirals":       "Spirals",
     "parity":        "Parity",
     "adding":        "Adding",
@@ -74,21 +75,25 @@ CONT_LABELS = {
 CAT_HPS_SUPERVISED = ["hp_optimizer", "hp_activation", "hp_depth", "hp_init_scale"]
 CAT_HPS_RNN        = ["hp_optimizer", "hp_cell_type",  "hp_n_rnn_layers", "hp_init_scale"]
 CAT_HPS_RL         = ["hp_optimizer", "hp_activation", "hp_depth", "hp_init_scale"]
+# CIFAR: activation relu/tanh, use_batchnorm (bool→int 0/1), depth 1/2/3
+CAT_HPS_CIFAR      = ["hp_activation", "hp_use_batchnorm", "hp_depth"]
 CAT_LABELS = {
-    "hp_optimizer":    "optimizer",
-    "hp_activation":   "activation",
-    "hp_depth":        "depth",
-    "hp_init_scale":   "init scale",
-    "hp_cell_type":    "cell type",
-    "hp_n_rnn_layers": "n rnn layers",
+    "hp_optimizer":     "optimizer",
+    "hp_activation":    "activation",
+    "hp_depth":         "depth",
+    "hp_init_scale":    "init scale",
+    "hp_cell_type":     "cell type",
+    "hp_n_rnn_layers":  "n rnn layers",
+    "hp_use_batchnorm": "use batchnorm",
 }
 CAT_COLORS = {
-    "hp_optimizer":    {"adam": "#2271b2", "sgd": "#e05c00"},
-    "hp_activation":   {"relu": "#2271b2", "sigmoid": "#e05c00", "tanh": "#2ba02b"},
-    "hp_depth":        {"1": "#2271b2", "2": "#e05c00"},
-    "hp_init_scale":   {"0.1": "#2271b2", "1.0": "#e05c00"},
-    "hp_cell_type":    {"gru": "#2271b2", "rnn": "#e05c00"},
-    "hp_n_rnn_layers": {"1": "#2271b2", "2": "#e05c00"},
+    "hp_optimizer":     {"adam": "#2271b2", "sgd": "#e05c00"},
+    "hp_activation":    {"relu": "#2271b2", "sigmoid": "#e05c00", "tanh": "#2ba02b"},
+    "hp_depth":         {"1": "#2271b2", "2": "#e05c00", "3": "#2ba02b"},
+    "hp_init_scale":    {"0.1": "#2271b2", "1.0": "#e05c00"},
+    "hp_cell_type":     {"gru": "#2271b2", "rnn": "#e05c00"},
+    "hp_n_rnn_layers":  {"1": "#2271b2", "2": "#e05c00"},
+    "hp_use_batchnorm": {"0": "#2271b2", "1": "#e05c00"},
 }
 
 RDM_PROPS = ["reliability", "category_corr", "dimensionality", "mean_dissimilarity"]
@@ -119,8 +124,9 @@ def _rdm_key(task, depth, metric):
 
 
 def _cat_hps_for_task(task):
-    if task in RNN_TASKS: return CAT_HPS_RNN
-    if task in RL_TASKS:  return CAT_HPS_RL
+    if task == "cifar10":  return CAT_HPS_CIFAR
+    if task in RNN_TASKS:  return CAT_HPS_RNN
+    if task in RL_TASKS:   return CAT_HPS_RL
     return CAT_HPS_SUPERVISED
 
 
@@ -145,7 +151,7 @@ def load_rdm_vectors(task, run_ids, metric="cosine"):
             cg = rg.get(ckpt)
             if cg is None:
                 continue
-            depth = int(rg.attrs.get("hp_depth", 1))
+            depth = get_depth(rg)
             key = _rdm_key(task, depth, metric)
             if key not in cg:
                 continue

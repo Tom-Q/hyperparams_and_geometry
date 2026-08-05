@@ -35,7 +35,7 @@ ANALYSIS  = Path(__file__).parent
 REPO_ROOT = ANALYSIS.parent
 sys.path.insert(0, str(ANALYSIS))
 from analysis_utils import (RDM_DIR, TABLES_DIR, FIGURES_DIR,
-                             RL_TASKS, TASK_NAMES, task_meta)
+                             RL_TASKS, TASK_NAMES, task_meta, get_depth)
 
 RNN_TASKS     = {"adding", "mnist_rnn"}
 SUBSAMPLE_MAX = 10_000
@@ -53,7 +53,7 @@ LOG_HPS       = {"hp_learning_rate", "hp_l1_reg", "hp_l2_reg"}
 def last_layer_key(task, rg):
     if task in RNN_TASKS:
         return f"temporal_{METRIC}"
-    depth = int(rg.attrs.get("hp_depth", 1))
+    depth = get_depth(rg)
     return f"layer_{depth - 1}_{METRIC}"
 
 
@@ -274,9 +274,9 @@ def analyze_task(task, data):
         rows.append({
             "task":       task,
             "bin":        N_BINS,       # plot past the last regular bin
-            "bin_center": 1.0,
-            "bin_lo":     1.0 - TOP_FRAC,
-            "bin_hi":     1.0,
+            "bin_center": float(norm_perfs[top_idx].mean()),
+            "bin_lo":     float(norm_perfs[top_idx].min()),
+            "bin_hi":     float(norm_perfs[top_idx].max()),
             "n_nets":     n_top,
             "n_pairs":    int(top_mask.sum()),
             "mean_sim":   float(1.0 - rdm_top.mean()),
@@ -327,7 +327,7 @@ def make_figures(df):
                         reg["mean_sim"] + reg["std_sim"],
                         alpha=0.15, color="#2166ac")
         if not top.empty:
-            ax.scatter([1.0], top["mean_sim"].values,
+            ax.scatter(top["bin_center"].values, top["mean_sim"].values,
                        marker="*", s=120, color="#d6604d", zorder=5,
                        label=f"top 1% (n={int(top['n_nets'].iloc[0])})")
             ax.legend(fontsize=6, loc="lower right")

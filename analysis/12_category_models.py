@@ -43,6 +43,12 @@ FASHION_LABELS = [
     "Sandal", "Shirt", "Sneaker", "Bag", "Ankle boot",
 ]
 
+# CIFAR-10 class names for figure labels
+CIFAR10_LABELS = [
+    "airplane", "automobile", "bird", "cat", "deer",
+    "dog", "frog", "horse", "ship", "truck",
+]
+
 
 # ---------------------------------------------------------------------------
 # Block / graded model builders
@@ -206,6 +212,12 @@ def models_adding(inputs, meta):
     }
 
 
+def models_cifar10(inputs, meta):
+    classes = meta["classes"]
+    D = block_model(classes)
+    return {"class": D}, {"class": classes}
+
+
 def models_fourrooms(inputs, meta):
     rows = meta["rows"].astype(float)
     cols = meta["cols"].astype(float)
@@ -305,6 +317,7 @@ TASK_FACTORIES = {
     "mnist_dual":    (models_mnist_dual,  "MNIST dual"),
     "mnist_10way":   (models_mnist_10way, "MNIST 10-way"),
     "fashion_10way": (models_fashion,     "Fashion 10-way"),
+    "cifar10":       (models_cifar10,     "CIFAR-10"),
     "mnist_rnn":     (models_mnist_rnn,   "MNIST RNN"),
     "spirals":       (models_spirals,     "Spirals"),
     "parity":        (models_parity,      "Parity"),

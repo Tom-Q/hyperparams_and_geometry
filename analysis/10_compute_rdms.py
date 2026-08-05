@@ -46,6 +46,10 @@ TASK_DIR_OVERRIDES = {}
 # activation vectors with norm below this are considered degenerate
 ZERO_NORM_THRESHOLD = 1e-8
 
+# Normalise config key names so all tasks use the same HP attribute names in HDF5.
+# CIFAR uses n_fc_layers; everything else uses depth.
+HP_NAME_MAP = {"n_fc_layers": "depth"}
+
 
 # ---------------------------------------------------------------------------
 # Core computation
@@ -104,10 +108,11 @@ def write_run_attrs(run_grp, iteration, bo_entry, run_meta):
     run_grp.attrs["best_metric"] = float(run_meta.get("best_metric", float("nan")))
 
     for hp_name, hp_val in run_meta.get("config", {}).items():
+        canonical = HP_NAME_MAP.get(hp_name, hp_name)
         if isinstance(hp_val, (int, float, bool, str)):
-            run_grp.attrs[f"hp_{hp_name}"] = hp_val
+            run_grp.attrs[f"hp_{canonical}"] = hp_val
         else:
-            run_grp.attrs[f"hp_{hp_name}"] = str(hp_val)
+            run_grp.attrs[f"hp_{canonical}"] = str(hp_val)
 
     unit_vals = bo_entry.get("cont_unit_vals")
     if unit_vals is not None:

@@ -33,7 +33,7 @@ from scipy.stats import spearmanr
 
 ANALYSIS = Path(__file__).parent
 sys.path.insert(0, str(ANALYSIS))
-from analysis_utils import FIGURES_DIR, RDM_DIR, TABLES_DIR, TASK_NAMES, RL_TASKS, metric_output_dirs
+from analysis_utils import FIGURES_DIR, RDM_DIR, TABLES_DIR, TASK_NAMES, RL_TASKS, metric_output_dirs, get_depth
 
 TASK_DIR_OVERRIDES = {}
 RNN_TASKS          = {"adding", "mnist_rnn"}
@@ -43,6 +43,7 @@ PRIMARY_MODEL = {
     "mnist_dual":    "output",
     "mnist_10way":   "digit",
     "fashion_10way": "class",
+    "cifar10":       "class",
     "spirals":       "spatial",
     "parity":        "hamming_diff",
     "adding":        "sum",
@@ -53,18 +54,22 @@ PRIMARY_MODEL = {
 
 # Continuous HPs per paradigm
 CONT_HPS = ["hp_learning_rate", "hp_l1_reg", "hp_l2_reg", "hp_hidden_size", "hp_batch_size"]
+# CIFAR: no l1_reg/optimizer/init_scale; depth treated as continuous (3 levels)
+CONT_HPS_CIFAR = ["hp_learning_rate", "hp_l2_reg", "hp_hidden_size", "hp_batch_size", "hp_depth"]
 CONT_LABELS = {
     "hp_learning_rate": "lr",
     "hp_l1_reg":        "l1",
     "hp_l2_reg":        "l2",
     "hp_hidden_size":   "hidden_size",
     "hp_batch_size":    "batch_size",
+    "hp_depth":         "depth",
 }
 
 # Categorical HPs: (attr_name, level_A_label, level_B_label)
 # Effect sign = positive if level_B has higher mean RDM property.
 # Levels must match the string representation stored in the DataFrame
-# (integer HPs stored as int → "1"/"2"; strings stored as-is).
+# (integer HPs stored as int → "1"/"2"; strings stored as-is;
+#  booleans stored as int → "0"/"1").
 CAT_HPS_SUPERVISED = [
     ("hp_optimizer",   "sgd",    "adam"),
     ("hp_activation",  "relu",   "sigmoid"),
@@ -79,15 +84,22 @@ CAT_HPS_RNN = [
     ("hp_n_rnn_layers", "1",    "2"),      # stored as int
     ("hp_init_scale",   "0.1",  "1.0"),
 ]
+# CIFAR: activation is relu/tanh only; use_batchnorm stored as int 0/1
+CAT_HPS_CIFAR = [
+    ("hp_activation",    "relu", "tanh"),
+    ("hp_use_batchnorm", "0",    "1"),
+]
 CAT_LABELS = {
     "hp_optimizer":                  "optimizer\n(sgd→adam)",
     "hp_activation:relu/sigmoid":    "activation\n(relu→sig)",
     "hp_activation:sigmoid/tanh":    "activation\n(sig→tanh)",
     "hp_activation:tanh/relu":       "activation\n(tanh→relu)",
+    "hp_activation:relu/tanh":       "activation\n(relu→tanh)",
     "hp_depth":                      "depth\n(1→2)",
     "hp_init_scale":                 "init_scale\n(0.1→1.0)",
     "hp_cell_type":                  "cell_type\n(gru→rnn)",
     "hp_n_rnn_layers":               "n_rnn_layers\n(1→2)",
+    "hp_use_batchnorm":              "use_batchnorm\n(F→T)",
 }
 
 RDM_PROPS    = ["reliability", "category_corr", "dimensionality", "mean_dissimilarity"]
@@ -103,6 +115,7 @@ PARADIGMS = [
     ("Supervised",  ["mnist_dual", "mnist_10way", "fashion_10way", "spirals", "parity"]),
     ("RNN",         ["adding", "mnist_rnn"]),
     ("RL",          ["cartpole", "fourrooms"]),
+    ("CIFAR",       ["cifar10"]),
 ]
 
 TASK_SHORT = {
@@ -115,6 +128,7 @@ TASK_SHORT = {
     "mnist_rnn":     "MNIST\nRNN",
     "cartpole":      "CartPole",
     "fourrooms":     "FourRooms",
+    "cifar10":       "CIFAR-10",
 }
 
 
@@ -154,12 +168,15 @@ def _adding_sum_model():
     return np.abs(targets[ri] - targets[ci])
 
 
-def load_per_network_stats(thresholds, metric="cosine"):
+def load_per_network_stats(thresholds, metric="cosine", tasks=None):
     """
     For each successful primary network, load:
       HPs, reliability, category_corr, dimensionality, mean_dissimilarity.
     Returns: dict task -> DataFrame.
+    tasks: list of tasks to process (default: all TASK_NAMES).
     """
+    if tasks is None:
+        tasks = TASK_NAMES
     _, metric_tables = metric_output_dirs(metric)
     nc_df  = pd.read_csv(metric_tables / "rdm_noise_ceiling.csv")
     cat_df = pd.read_csv(metric_tables / "rdm_category_structure.csv")
@@ -182,7 +199,7 @@ def load_per_network_stats(thresholds, metric="cosine"):
     task_dfs = {}
     ckpt_map = {t: ("final" if t in RL_TASKS else "best") for t in TASK_NAMES}
 
-    for task in TASK_NAMES:
+    for task in tasks:
         h5_path = RDM_DIR / f"{task}_rdms.h5"
         if not h5_path.exists():
             continue
@@ -202,7 +219,7 @@ def load_per_network_stats(thresholds, metric="cosine"):
                 if th is not None and perf < th:
                     continue
 
-                depth = int(rg.attrs.get("hp_depth", 1))
+                depth = get_depth(rg)
                 cg    = rg.get(ckpt)
                 if cg is None:
                     continue
@@ -305,9 +322,15 @@ def compute_effects(df, task):
     Compute all HP × RDM property effect sizes for one task.
     Returns list of dicts.
     """
-    is_rnn = task in RNN_TASKS
-    is_rl  = task in RL_TASKS
-    rows   = []
+    is_rnn   = task in RNN_TASKS
+    is_rl    = task in RL_TASKS
+    is_cifar = task == "cifar10"
+    rows     = []
+
+    cont_hps = CONT_HPS_CIFAR if is_cifar else CONT_HPS
+    cat_hps  = (CAT_HPS_CIFAR  if is_cifar else
+                CAT_HPS_RNN    if is_rnn   else
+                CAT_HPS_SUPERVISED)
 
     for prop in RDM_PROPS:
         if prop not in df.columns:
@@ -315,7 +338,7 @@ def compute_effects(df, task):
         y = df[prop].values.astype(float)
 
         # Continuous HPs
-        for hp in CONT_HPS:
+        for hp in cont_hps:
             if hp == "hp_batch_size" and is_rl:
                 continue   # RL has no batch_size
             if hp not in df.columns:
@@ -326,7 +349,6 @@ def compute_effects(df, task):
                          "rdm_prop": prop, "effect": r})
 
         # Categorical HPs
-        cat_hps = CAT_HPS_RNN if is_rnn else CAT_HPS_SUPERVISED
         for hp_attr, lev_a, lev_b in cat_hps:
             if hp_attr not in df.columns:
                 continue
@@ -344,10 +366,13 @@ def compute_effects(df, task):
 # ---------------------------------------------------------------------------
 
 def hp_row_order(task):
-    is_rnn = task in RNN_TASKS
-    cat_hps = CAT_HPS_RNN if is_rnn else CAT_HPS_SUPERVISED
-    cont = [h for h in CONT_HPS
-            if not (h == "hp_batch_size" and task in RL_TASKS)]
+    is_rnn   = task in RNN_TASKS
+    is_cifar = task == "cifar10"
+    cont_hps = CONT_HPS_CIFAR if is_cifar else CONT_HPS
+    cat_hps  = (CAT_HPS_CIFAR  if is_cifar else
+                CAT_HPS_RNN    if is_rnn   else
+                CAT_HPS_SUPERVISED)
+    cont = [h for h in cont_hps if not (h == "hp_batch_size" and task in RL_TASKS)]
     cat  = [_hp_key(h, la, lb, cat_hps) for h, la, lb in cat_hps]
     return cont + cat
 
@@ -505,6 +530,8 @@ def main():
     parser = argparse.ArgumentParser(description="HP effects on RDM properties.")
     parser.add_argument("--metric", choices=["cosine", "pearson"], default="cosine",
                         help="RDM metric to use (default: cosine).")
+    parser.add_argument("--tasks", nargs="+", default=None,
+                        help="Only recompute these tasks, upserting into existing CSVs.")
     args = parser.parse_args()
 
     out_figures, out_tables = metric_output_dirs(args.metric)
@@ -512,25 +539,45 @@ def main():
     out_tables.mkdir(parents=True, exist_ok=True)
 
     thresholds = load_thresholds()
+    update_tasks = args.tasks  # None → full recompute
 
     print("Loading per-network stats ...")
-    task_dfs = load_per_network_stats(thresholds, metric=args.metric)
+    new_task_dfs = load_per_network_stats(thresholds, metric=args.metric,
+                                          tasks=update_tasks)
+
+    # Upsert per-network stats CSV
+    per_net_path = out_tables / "rdm_per_network_stats.csv"
+    if update_tasks and per_net_path.exists():
+        old = pd.read_csv(per_net_path)
+        old = old[~old["task"].isin(update_tasks)]
+        new_rows = pd.concat(list(new_task_dfs.values()), ignore_index=True)
+        per_net = pd.concat([old, new_rows], ignore_index=True)
+    else:
+        per_net = pd.concat(list(new_task_dfs.values()), ignore_index=True)
+    per_net.to_csv(per_net_path, index=False)
+
+    # Reconstruct full task_dfs from merged CSV (needed for figure)
+    task_dfs = {task: grp.reset_index(drop=True)
+                for task, grp in per_net.groupby("task")}
 
     print("\nComputing HP effects ...")
-    all_effects = []
-    for task, df in task_dfs.items():
-        effects = compute_effects(df, task)
-        all_effects.extend(effects)
+    tasks_for_effects = update_tasks if update_tasks else list(task_dfs.keys())
+    new_effects = []
+    for task in tasks_for_effects:
+        if task not in task_dfs:
+            continue
+        effects = compute_effects(task_dfs[task], task)
+        new_effects.extend(effects)
         print(f"  {task}: {len(effects)} (HP, prop) pairs")
 
-    effects_df = pd.DataFrame(all_effects)
-
-    # Save per-network stats (used by script 21)
-    per_net = pd.concat(list(task_dfs.values()), ignore_index=True)
-    per_net.to_csv(out_tables / "rdm_per_network_stats.csv", index=False)
-
-    # Save HP effects
+    # Upsert HP effects CSV
     csv_path = out_tables / "rdm_hp_effects.csv"
+    if update_tasks and csv_path.exists():
+        old_eff = pd.read_csv(csv_path)
+        old_eff = old_eff[~old_eff["task"].isin(update_tasks)]
+        effects_df = pd.concat([old_eff, pd.DataFrame(new_effects)], ignore_index=True)
+    else:
+        effects_df = pd.DataFrame(new_effects)
     effects_df.to_csv(csv_path, index=False)
     print(f"\nSaved: {csv_path}")
 

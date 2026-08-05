@@ -37,7 +37,7 @@ from umap import UMAP
 ANALYSIS  = Path(__file__).parent
 REPO_ROOT = ANALYSIS.parent
 sys.path.insert(0, str(ANALYSIS))
-from analysis_utils import RDM_DIR, TABLES_DIR, RL_TASKS
+from analysis_utils import RDM_DIR, TABLES_DIR, RL_TASKS, get_depth
 
 OUT_DIR   = REPO_ROOT / "output" / "analysis" / "thru_learning_exploratory"
 RNN_TASKS = {"adding", "mnist_rnn"}
@@ -76,7 +76,7 @@ def ref_ckpt_name(task):
 def last_layer_key(task, rg):
     if task in RNN_TASKS:
         return f"temporal_{METRIC}"
-    depth = int(rg.attrs.get("hp_depth", 1))
+    depth = get_depth(rg)
     return f"layer_{depth - 1}_{METRIC}"
 
 

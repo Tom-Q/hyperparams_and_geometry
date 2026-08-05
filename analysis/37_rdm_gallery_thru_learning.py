@@ -23,7 +23,7 @@ import numpy as np
 ANALYSIS  = Path(__file__).parent
 REPO_ROOT = ANALYSIS.parent
 sys.path.insert(0, str(ANALYSIS))
-from analysis_utils import RDM_DIR, TABLES_DIR, FIGURES_DIR, PRODUCTION_DIR, RL_TASKS, TASK_NAMES
+from analysis_utils import RDM_DIR, TABLES_DIR, FIGURES_DIR, PRODUCTION_DIR, RL_TASKS, TASK_NAMES, get_depth
 
 RNN_TASKS    = {"adding", "mnist_rnn"}
 N_SUCCESS    = 15
@@ -42,7 +42,7 @@ MAX_MAT_DIM  = 150     # downsample RDM matrix to this size for display
 def last_layer_key(task, rg):
     if task in RNN_TASKS:
         return f"temporal_{METRIC}"
-    depth = int(rg.attrs.get("hp_depth", 1))
+    depth = get_depth(rg)
     return f"layer_{depth - 1}_{METRIC}"
 
 

@@ -39,7 +39,7 @@ from scipy.stats import spearmanr
 
 ANALYSIS = Path(__file__).parent
 sys.path.insert(0, str(ANALYSIS))
-from analysis_utils import FIGURES_DIR, RDM_DIR, TABLES_DIR
+from analysis_utils import FIGURES_DIR, RDM_DIR, TABLES_DIR, get_depth
 
 MNIST_TASKS = ["mnist_dual", "mnist_10way", "mnist_rnn"]
 
@@ -118,29 +118,16 @@ def load_successful_rdms(task, threshold):
             perf = float(rg.attrs.get("performance", float("nan")))
             if threshold is not None and perf < threshold:
                 continue
-            depth    = int(rg.attrs.get("hp_depth", 1))
+            depth    = get_depth(rg)
             ckpt_grp = rg.get(ckpt)
             if ckpt_grp is None:
                 continue
 
             # Last hidden layer
             if task == "mnist_rnn":
-                parsed = []
-                for k in ckpt_grp.keys():
-                    if "_t_" not in k:
-                        continue
-                    parts = k.split("_")
-                    try:
-                        parsed.append((int(parts[1]), int(parts[3])))
-                    except (IndexError, ValueError):
-                        pass
-                if not parsed:
-                    continue
-                max_l = max(p[0] for p in parsed)
-                max_t = max(p[1] for p in parsed if p[0] == max_l)
-                key = f"layer_{max_l}_t_{max_t}"
+                key = "temporal_cosine"
             else:
-                key = f"layer_{max(0, depth - 1)}"
+                key = f"layer_{max(0, depth - 1)}_cosine"
 
             ds = ckpt_grp.get(key)
             if ds is None or ds.attrs.get("degenerate", False) or len(ds) == 0:

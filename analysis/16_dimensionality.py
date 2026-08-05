@@ -36,7 +36,7 @@ import pandas as pd
 ANALYSIS = Path(__file__).parent
 sys.path.insert(0, str(ANALYSIS))
 from analysis_utils import (
-    DATASET_DIR, FIGURES_DIR, RDM_DIR, TABLES_DIR, TASK_NAMES, RL_TASKS, task_meta,
+    DATASET_DIR, FIGURES_DIR, RDM_DIR, TABLES_DIR, TASK_NAMES, RL_TASKS, task_meta, get_depth,
 )
 
 TASK_DIR_OVERRIDES = {}
@@ -124,7 +124,7 @@ def load_task_dimensionality(task):
                 continue
 
             perf       = float(rg.attrs.get("performance", float("nan")))
-            depth      = int(rg.attrs.get("hp_depth", 1))
+            depth      = get_depth(rg)
             hidden_sz  = int(rg.attrs.get("hp_hidden_size", 0))
 
             npz_path = task_dir / run_id / f"{ckpt}.npz"

@@ -38,7 +38,7 @@ from scipy.stats import spearmanr
 ANALYSIS = Path(__file__).parent
 sys.path.insert(0, str(ANALYSIS))
 from analysis_utils import (
-    CACHE_DIR, FIGURES_DIR, RDM_DIR, TABLES_DIR, TASK_NAMES, RL_TASKS, task_meta,
+    CACHE_DIR, FIGURES_DIR, RDM_DIR, TABLES_DIR, TASK_NAMES, RL_TASKS, task_meta, get_depth,
 )
 
 MODELS_DIR = CACHE_DIR / "category_models"
@@ -50,6 +50,7 @@ TASK_MODELS_ORDERED = {
     "mnist_dual":    ["digit", "mixed", "output"],
     "mnist_10way":   ["digit"],
     "fashion_10way": ["class"],
+    "cifar10":       ["class"],
     "spirals":       ["spatial", "arm"],
     "parity":        ["hamming_diff", "parity_label"],
     "cartpole":      ["euclidean", "angle_diff"],
@@ -72,13 +73,14 @@ MODEL_COLORS = {
     "goal_dist":    "#4dac26",
 }
 
-LAYER_COLORS = {0: "#4393c3", 1: "#d6604d"}
-LAYER_LABELS = {0: "layer 0 (input-side)", 1: "layer 1 (output-side)"}
+LAYER_COLORS = {0: "#4393c3", 1: "#d6604d", 2: "#4dac26"}
+LAYER_LABELS = {0: "layer 0 (input-side)", 1: "layer 1 (middle)", 2: "layer 2 (output-side)"}
 
 TASK_LABELS = {
     "mnist_dual":    "MNIST dual",
     "mnist_10way":   "MNIST 10-way",
     "fashion_10way": "Fashion 10-way",
+    "cifar10":       "CIFAR-10",
     "spirals":       "Spirals",
     "parity":        "Parity",
     "cartpole":      "CartPole",
@@ -131,14 +133,14 @@ def load_depth2_pairs(task, threshold):
             rg = runs_grp[run_id]
             if bool(rg.attrs.get("is_repeat", False)):
                 continue
-            if int(rg.attrs.get("hp_depth", 1)) != 2:
+            if get_depth(rg) != 2:
                 continue
             perf     = float(rg.attrs.get("performance", float("nan")))
             ckpt_grp = rg.get(ckpt)
             if ckpt_grp is None:
                 continue
-            ds0 = ckpt_grp.get("layer_0")
-            ds1 = ckpt_grp.get("layer_1")
+            ds0 = ckpt_grp.get("layer_0_cosine")
+            ds1 = ckpt_grp.get("layer_1_cosine")
             if ds0 is None or ds1 is None:
                 continue
             if (ds0.attrs.get("degenerate", False) or len(ds0) == 0 or
@@ -170,9 +172,89 @@ def load_cat_vecs(task):
     return cat_vecs
 
 
+def load_networks_by_depth(task, threshold):
+    """Load all primary networks grouped by depth. Returns {depth: [net_dicts]}."""
+    h5_path = RDM_DIR / f"{task}_rdms.h5"
+    if not h5_path.exists():
+        return {}
+    ckpt    = "final" if task in RL_TASKS else "best"
+    by_depth = {}
+
+    with h5py.File(h5_path, "r") as h5:
+        runs_grp = h5.get("runs", {})
+        for run_id in sorted(runs_grp.keys()):
+            rg = runs_grp[run_id]
+            if bool(rg.attrs.get("is_repeat", False)):
+                continue
+            depth    = get_depth(rg)
+            perf     = float(rg.attrs.get("performance", float("nan")))
+            ckpt_grp = rg.get(ckpt)
+            if ckpt_grp is None:
+                continue
+            layers = {}
+            ok = True
+            for li in range(depth):
+                ds = ckpt_grp.get(f"layer_{li}_cosine")
+                if ds is None or ds.attrs.get("degenerate", False) or len(ds) == 0:
+                    ok = False
+                    break
+                layers[li] = ds[:].astype(np.float32)
+            if not ok or not layers:
+                continue
+            by_depth.setdefault(depth, []).append({
+                "run_id":     run_id,
+                "perf":       perf,
+                "depth":      depth,
+                "layers":     layers,
+                "successful": (threshold is None or perf >= threshold),
+            })
+
+    return by_depth
+
+
 # ---------------------------------------------------------------------------
 # Per-task analysis
 # ---------------------------------------------------------------------------
+
+def analyse_depth_group(task, networks, cat_vecs):
+    """
+    Compute per-network metrics for a group of networks (any depth).
+    Returns (rows, nc_by_layer, within_by_pair).
+      nc_by_layer   : {li: LOO Spearman array (successful nets)}
+      within_by_pair: {(i,j): array of within-network Spearman r}
+    """
+    depth = networks[0]["depth"] if networks else 0
+    pairs_keys = [(i, j) for i in range(depth) for j in range(i + 1, depth)]
+    within_by_pair = {k: [] for k in pairs_keys}
+    rows = []
+
+    for net in networks:
+        row = {
+            "task":        task,
+            "run_id":      net["run_id"],
+            "performance": net["perf"],
+            "successful":  net["successful"],
+        }
+        for li, vec in net["layers"].items():
+            for model_name, cat_vec in cat_vecs.items():
+                r = spearmanr(vec, cat_vec)[0] if np.isfinite(vec).all() else np.nan
+                row[f"l{li}_{model_name}"] = float(r) if np.isfinite(r) else float("nan")
+        for (i, j) in pairs_keys:
+            if i in net["layers"] and j in net["layers"]:
+                r = spearmanr(net["layers"][i], net["layers"][j])[0]
+                within_by_pair[(i, j)].append(float(r))
+                row[f"within_corr_l{i}l{j}"] = float(r) if np.isfinite(r) else float("nan")
+        rows.append(row)
+
+    succ = [net for net in networks if net["successful"]]
+    nc_by_layer = {}
+    for li in range(depth):
+        vecs = [net["layers"][li] for net in succ if li in net["layers"]]
+        nc_by_layer[li] = noise_ceiling_loo(np.array(vecs, dtype=np.float32)) if len(vecs) >= 3 else np.array([])
+
+    within_by_pair = {k: np.array(v) for k, v in within_by_pair.items()}
+    return rows, nc_by_layer, within_by_pair
+
 
 def analyse_task(task, pairs, cat_vecs, ordered_models):
     """
@@ -367,6 +449,149 @@ def make_summary_figure(results_by_task, all_tasks):
 
 
 # ---------------------------------------------------------------------------
+# CIFAR-specific panels and figure (handles depth 1–3)
+# ---------------------------------------------------------------------------
+
+def _nc_violin_layers(ax, nc_by_layer):
+    """Violin per layer, using LAYER_COLORS keyed by layer index."""
+    layer_ids = sorted(nc_by_layer.keys())
+    data = [(nc_by_layer[li], li) for li in layer_ids if len(nc_by_layer[li]) > 0]
+    if not data:
+        ax.text(0.5, 0.5, "no data", ha="center", va="center", transform=ax.transAxes)
+        return
+    arrays, lids = zip(*data)
+    parts = ax.violinplot(list(arrays), positions=list(lids), showmedians=True, showextrema=True)
+    for body, li in zip(parts["bodies"], lids):
+        body.set_facecolor(LAYER_COLORS[li])
+        body.set_alpha(0.6)
+    ax.set_xticks(list(lids))
+    ax.set_xticklabels([f"layer {li}" for li in lids], fontsize=8)
+    ax.set_ylabel("LOO Spearman r", fontsize=8)
+    ax.set_ylim(-0.1, 1.05)
+    ax.axhline(0, color="grey", lw=0.6, ls="--")
+
+
+def _bar_layers(ax, models, medians_by_layer, q25_by_layer, q75_by_layer, n_nets):
+    """Grouped bar chart: one group per model, one bar per layer."""
+    layer_ids = sorted(medians_by_layer.keys())
+    n_layers  = len(layer_ids)
+    x         = np.arange(len(models))
+    w         = 0.7 / max(n_layers, 1)
+    offsets   = np.linspace(-0.35 + w / 2, 0.35 - w / 2, n_layers)
+
+    for li, offset in zip(layer_ids, offsets):
+        for i, (m, lo, hi) in enumerate(
+                zip(medians_by_layer[li], q25_by_layer[li], q75_by_layer[li])):
+            ax.bar(x[i] + offset, m, w,
+                   yerr=[[m - lo], [hi - m]],
+                   color=LAYER_COLORS[li], capsize=3, alpha=0.85,
+                   label=f"layer {li}" if i == 0 else "")
+
+    ax.set_xticks(x)
+    ax.set_xticklabels([m.replace("_", "\n") for m in models], fontsize=8)
+    ax.set_ylabel("Spearman r (cat. model)", fontsize=8)
+    ax.set_ylim(-0.1, 0.85)
+    ax.axhline(0, color="grey", lw=0.6, ls="--")
+    ax.legend(fontsize=7)
+    ax.text(0.98, 0.97, f"n={n_nets}", transform=ax.transAxes,
+            fontsize=7, ha="right", va="top", color="grey")
+
+
+def _within_violin_pairs(ax, within_by_pair):
+    """Violin per layer pair."""
+    pairs = sorted(within_by_pair.keys())
+    valid = [(p, within_by_pair[p]) for p in pairs if len(within_by_pair[p]) >= 3]
+    if not valid:
+        ax.text(0.5, 0.5, "no data", ha="center", va="center", transform=ax.transAxes)
+        return
+    arrays   = [v for _, v in valid]
+    positions = list(range(len(valid)))
+    parts = ax.violinplot(arrays, positions=positions, showmedians=True, showextrema=True)
+    for body in parts["bodies"]:
+        body.set_facecolor("#888888")
+        body.set_alpha(0.6)
+    labels = [f"l{i}↔l{j}" for (i, j), _ in valid]
+    ax.set_xticks(positions)
+    ax.set_xticklabels(labels, fontsize=7)
+    ax.set_xlim(-0.6, len(valid) - 0.4)
+    ax.set_ylim(-0.1, 1.05)
+    ax.set_ylabel("Spearman r", fontsize=8)
+    ax.axhline(0, color="grey", lw=0.6, ls="--")
+    for pos, (_, arr) in zip(positions, valid):
+        ax.text(pos, 0.03, f"med={np.median(arr):.2f}",
+                ha="center", fontsize=6, color="grey",
+                transform=ax.get_xaxis_transform())
+
+
+def make_cifar_figure(cifar_by_depth):
+    """
+    3-row figure (depth=1, 2, 3) × 3 cols (category structure | noise ceiling | within-network corr).
+    cifar_by_depth: {depth: {"rows", "nc_by_layer", "within_by_pair", "ordered_models"}}
+    """
+    depths = sorted(cifar_by_depth.keys())
+    n_rows = len(depths)
+    fig, axes = plt.subplots(n_rows, 3, figsize=(14, 4.5 * n_rows), squeeze=False)
+
+    for row_idx, depth in enumerate(depths):
+        res          = cifar_by_depth[depth]
+        df           = pd.DataFrame(res["rows"])
+        nc_by_layer  = res["nc_by_layer"]
+        within_pairs = res["within_by_pair"]
+        ordered      = res["ordered_models"]
+
+        succ_df = df[df["successful"]] if "successful" in df.columns else df
+        n_nets  = len(succ_df)
+
+        ax_cat, ax_nc, ax_wc = axes[row_idx]
+
+        # Panel 1: category structure per layer
+        layer_ids = list(range(depth))
+        medians_by_layer, q25_by_layer, q75_by_layer = {}, {}, {}
+        for li in layer_ids:
+            meds, q25s, q75s = [], [], []
+            for m in ordered:
+                col = succ_df.get(f"l{li}_{m}", pd.Series(dtype=float)).dropna()
+                meds.append(col.median()           if len(col) else np.nan)
+                q25s.append(np.percentile(col, 25) if len(col) else np.nan)
+                q75s.append(np.percentile(col, 75) if len(col) else np.nan)
+            medians_by_layer[li] = meds
+            q25_by_layer[li]     = q25s
+            q75_by_layer[li]     = q75s
+
+        if ordered:
+            _bar_layers(ax_cat, ordered,
+                        medians_by_layer, q25_by_layer, q75_by_layer, n_nets)
+        else:
+            ax_cat.text(0.5, 0.5, "no category model",
+                        ha="center", va="center", transform=ax_cat.transAxes)
+        ax_cat.set_title(f"CIFAR-10 depth={depth} — category structure",
+                         fontsize=9, fontweight="bold")
+
+        # Panel 2: noise ceiling
+        _nc_violin_layers(ax_nc, nc_by_layer)
+        nc_str = ", ".join(
+            f"L{li}={np.nanmedian(nc_by_layer[li]):.2f}" if len(nc_by_layer[li]) else f"L{li}=—"
+            for li in sorted(nc_by_layer)
+        )
+        ax_nc.set_title(f"Noise ceiling ({nc_str})", fontsize=9)
+
+        # Panel 3: within-network correlations (only meaningful for depth >= 2)
+        if depth >= 2:
+            _within_violin_pairs(ax_wc, within_pairs)
+            ax_wc.set_title("Within-network layer corr.", fontsize=9)
+        else:
+            ax_wc.set_visible(False)
+
+    fig.suptitle(
+        "CIFAR-10 layer comparison — all depth levels (1–3)\n"
+        "Category structure (successful) | Noise ceiling | Within-network correlation",
+        fontsize=11,
+    )
+    fig.tight_layout(rect=[0, 0, 1, 0.96])
+    return fig
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -375,7 +600,8 @@ def main():
     TABLES_DIR.mkdir(parents=True, exist_ok=True)
 
     thresholds = load_thresholds()
-    all_tasks  = [t for t in TASK_NAMES if t not in RNN_TASKS]
+    # CIFAR has variable depth (1–3) and gets its own figure; exclude from depth=2 summary
+    all_tasks  = [t for t in TASK_NAMES if t not in RNN_TASKS and t != "cifar10"]
 
     results_by_task = {}
     all_rows = []
@@ -407,6 +633,25 @@ def main():
         }
         all_rows.extend(rows)
 
+    # CIFAR-10: separate analysis across all depth levels
+    print("\nCIFAR-10 (all depths) ...", flush=True)
+    cifar_threshold = thresholds.get("cifar10")
+    cifar_by_depth_raw = load_networks_by_depth("cifar10", cifar_threshold)
+    cifar_cat_vecs = load_cat_vecs("cifar10")
+    cifar_ordered  = [m for m in TASK_MODELS_ORDERED.get("cifar10", []) if m in cifar_cat_vecs]
+    cifar_by_depth = {}
+    for depth, networks in sorted(cifar_by_depth_raw.items()):
+        succ = sum(n["successful"] for n in networks)
+        print(f"  depth={depth}: {len(networks)} nets, {succ} successful", flush=True)
+        rows, nc_by_layer, within_by_pair = analyse_depth_group("cifar10", networks, cifar_cat_vecs)
+        cifar_by_depth[depth] = {
+            "rows":          rows,
+            "nc_by_layer":   nc_by_layer,
+            "within_by_pair": within_by_pair,
+            "ordered_models": cifar_ordered,
+        }
+        all_rows.extend(rows)
+
     # Save CSV
     csv_path = TABLES_DIR / "rdm_layer_comparison.csv"
     pd.DataFrame(all_rows).to_csv(csv_path, index=False)
@@ -419,13 +664,21 @@ def main():
     plt.close(fig_focal)
     print(f"Saved: {out_focal}")
 
-    # Summary figure
+    # Summary figure (depth=2 tasks, excluding CIFAR)
     fig_sum = make_summary_figure(results_by_task, all_tasks)
     if fig_sum is not None:
         out_sum = FIGURES_DIR / "f1_layer_comparison_summary.pdf"
         fig_sum.savefig(out_sum, bbox_inches="tight", dpi=150)
         plt.close(fig_sum)
         print(f"Saved: {out_sum}")
+
+    # CIFAR figure (all depths)
+    if cifar_by_depth:
+        fig_cifar = make_cifar_figure(cifar_by_depth)
+        out_cifar = FIGURES_DIR / "f1_layer_comparison_cifar10.pdf"
+        fig_cifar.savefig(out_cifar, bbox_inches="tight", dpi=150)
+        plt.close(fig_cifar)
+        print(f"Saved: {out_cifar}")
 
 
 if __name__ == "__main__":

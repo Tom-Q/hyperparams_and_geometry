@@ -27,7 +27,7 @@ ANALYSIS = Path(__file__).parent
 sys.path.insert(0, str(ANALYSIS))
 from analysis_utils import (
     FIGURES_DIR, RDM_DIR, TABLES_DIR, TASK_NAMES, RL_TASKS,
-    metric_output_dirs,
+    metric_output_dirs, get_depth,
 )
 
 RNN_TASKS = {"adding", "mnist_rnn"}
@@ -72,7 +72,7 @@ def last_layer_key(task, rg, metric):
     """Return the dataset key for the last hidden layer RDM of this network."""
     if task in RNN_TASKS:
         return f"temporal_{metric}"
-    depth = int(rg.attrs.get("hp_depth", 1))
+    depth = get_depth(rg)
     return f"layer_{depth - 1}_{metric}"
 
 

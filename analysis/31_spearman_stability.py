@@ -13,6 +13,7 @@ Output:
   output/analysis/figures/spearman_stability_{window}.pdf
 """
 
+import argparse
 import json
 import sys
 from pathlib import Path
@@ -27,7 +28,7 @@ from scipy.stats import spearmanr
 ANALYSIS = Path(__file__).parent
 REPO_ROOT = ANALYSIS.parent
 sys.path.insert(0, str(ANALYSIS))
-from analysis_utils import TABLES_DIR, FIGURES_DIR, RL_TASKS, TASK_NAMES
+from analysis_utils import TABLES_DIR, FIGURES_DIR, RL_TASKS, TASK_NAMES, get_depth_from_config
 
 PROD_DIR  = REPO_ROOT / "output" / "production"
 RNN_TASKS = {"adding", "mnist_rnn"}
@@ -76,7 +77,7 @@ def process_network(run_dir, task, cutoff_fraction, bo_perf):
     if not meta_path.exists():
         return None
     meta       = json.load(open(meta_path))
-    depth      = int(meta.get("config", {}).get("depth", 1))
+    depth      = get_depth_from_config(meta.get("config", {}))
     final_step = int(meta.get("final_step", 0))
     if final_step == 0:
         return None
@@ -176,13 +177,20 @@ def make_figure(df, thresholds, window_pct):
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--tasks", nargs="+", default=None,
+                        help="Only recompute these tasks, upserting into existing CSVs.")
+    args = parser.parse_args()
+    update_tasks = set(args.tasks) if args.tasks else None
+
     TABLES_DIR.mkdir(parents=True, exist_ok=True)
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
     thresholds = load_thresholds()
 
-    # Load all run dirs once
+    # Load run dirs for tasks to process
+    tasks_to_run = [t for t in TASK_NAMES if update_tasks is None or t in update_tasks]
     task_run_dirs = {}
-    for task in TASK_NAMES:
+    for task in tasks_to_run:
         task_dir = PROD_DIR / task
         if not task_dir.exists():
             print(f"  {task}: not found, skipping")
@@ -203,9 +211,12 @@ def main():
                 if result is not None:
                     rows.append(result)
 
-        df = pd.DataFrame(rows)
-
         csv_out = TABLES_DIR / f"spearman_stability_{window_label}.csv"
+        df = pd.DataFrame(rows)
+        if update_tasks and csv_out.exists():
+            old = pd.read_csv(csv_out)
+            old = old[~old["task"].isin(update_tasks)]
+            df = pd.concat([old, df], ignore_index=True)
         df.to_csv(csv_out, index=False)
         print(f"  Saved: {csv_out.name}")
 

@@ -34,7 +34,7 @@ sys.path.insert(0, str(ANALYSIS))
 from analysis_utils import (
     CACHE_DIR, DATASET_DIR, FIGURES_DIR, RDM_DIR, TABLES_DIR,
     metric_output_dirs,
-    TASK_NAMES, RL_TASKS, task_meta,
+    TASK_NAMES, RL_TASKS, task_meta, get_depth,
 )
 
 MODELS_DIR         = CACHE_DIR / "category_models"
@@ -66,6 +66,7 @@ PRIMARY_MODEL = {
     "fashion_10way": "class",
     "parity":        "parity_label",
     "cartpole":      "euclidean",
+    "cifar10":       "class",
 }
 
 MULTI_MODEL["mnist_rnn"] = [
@@ -157,7 +158,7 @@ def load_all_primary_rdms(task, metric="cosine"):
             if bool(rg.attrs.get("is_repeat", False)):
                 continue
             perf = float(rg.attrs.get("performance", float("nan")))
-            depth = int(rg.attrs.get("hp_depth", 1))
+            depth = get_depth(rg)
             ckpt_grp = rg.get(ckpt)
             if ckpt_grp is None:
                 continue

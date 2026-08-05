@@ -36,17 +36,18 @@ from scipy.stats import spearmanr
 ANALYSIS = Path(__file__).parent
 sys.path.insert(0, str(ANALYSIS))
 from analysis_utils import (
-    CACHE_DIR, RDM_DIR, TABLES_DIR, TASK_NAMES, RL_TASKS, metric_output_dirs
+    CACHE_DIR, RDM_DIR, TABLES_DIR, TASK_NAMES, RL_TASKS, metric_output_dirs, get_depth,
 )
 
 RNN_TASKS = {"adding", "mnist_rnn"}
-# Depth=2 makes no sense for RNN tasks; exclude them entirely
+# RNN tasks use n_rnn_layers instead of depth; exclude them
 LAYER_TASKS = [t for t in TASK_NAMES if t not in RNN_TASKS]
 
 PRIMARY_MODEL = {
     "mnist_dual":    "output",
     "mnist_10way":   "digit",
     "fashion_10way": "class",
+    "cifar10":       "class",
     "spirals":       "spatial",
     "parity":        "hamming_diff",
     "cartpole":      "euclidean",
@@ -63,7 +64,7 @@ CONT_LABELS = {
     "hp_batch_size":    "batch_size",
 }
 
-# Categorical HPs — depth excluded (all depth=2); same three activation contrasts as script 20
+# Categorical HPs — depth excluded (fixed per group); same three activation contrasts as script 20
 CAT_HPS_SUPERVISED = [
     ("hp_optimizer",  "sgd",     "adam"),
     ("hp_activation", "relu",    "sigmoid"),
@@ -72,13 +73,20 @@ CAT_HPS_SUPERVISED = [
     ("hp_init_scale", "0.1",     "1.0"),
 ]
 CAT_HPS_RL = CAT_HPS_SUPERVISED  # RL has no batch_size but same categorical HPs
+# CIFAR: no optimizer/init_scale; activation relu/tanh only; use_batchnorm
+CAT_HPS_CIFAR = [
+    ("hp_activation",    "relu", "tanh"),
+    ("hp_use_batchnorm", "0",    "1"),
+]
 
 CAT_LABELS = {
     "hp_optimizer":               "optimizer\n(sgd→adam)",
     "hp_activation:relu/sigmoid": "activation\n(relu→sig)",
     "hp_activation:sigmoid/tanh": "activation\n(sig→tanh)",
     "hp_activation:tanh/relu":    "activation\n(tanh→relu)",
+    "hp_activation:relu/tanh":    "activation\n(relu→tanh)",
     "hp_init_scale":              "init_scale\n(0.1→1.0)",
+    "hp_use_batchnorm":           "use_batchnorm\n(F→T)",
 }
 
 RDM_PROPS = ["reliability", "category_corr", "mean_dissimilarity"]
@@ -91,6 +99,7 @@ RDM_LABELS = {
 PARADIGMS = [
     ("Supervised", ["mnist_dual", "mnist_10way", "fashion_10way", "spirals", "parity"]),
     ("RL",         ["cartpole", "fourrooms"]),
+    ("CIFAR",      ["cifar10"]),
 ]
 
 TASK_SHORT = {
@@ -101,6 +110,7 @@ TASK_SHORT = {
     "parity":        "Parity",
     "cartpole":      "CartPole",
     "fourrooms":     "FourRooms",
+    "cifar10":       "CIFAR-10",
 }
 
 
@@ -165,17 +175,15 @@ def loo_spearman(mat):
 def load_all_depth_layers(task, threshold, metric="cosine"):
     """
     Single HDF5 pass: collect layer RDMs for all successful primaries.
-    Returns three lists of row-dicts (each with run_id, hp_*, vec):
-      d1_rows   — depth=1, layer_0
-      d2l0_rows — depth=2, layer_0
-      d2l1_rows — depth=2, layer_1
+    Returns dict {(depth, layer_idx): [row_dicts with run_id, hp_*, vec]}.
+    Handles depth=1, 2, 3.
     """
     h5_path = RDM_DIR / f"{task}_rdms.h5"
     if not h5_path.exists():
-        return [], [], []
+        return {}
 
     ckpt = "final" if task in RL_TASKS else "best"
-    d1, d2l0, d2l1 = [], [], []
+    groups = {}
 
     with h5py.File(h5_path, "r") as h5:
         runs_grp = h5.get("runs", {})
@@ -186,45 +194,32 @@ def load_all_depth_layers(task, threshold, metric="cosine"):
             perf = float(rg.attrs.get("performance", float("nan")))
             if threshold is not None and perf < threshold:
                 continue
-            depth = int(rg.attrs.get("hp_depth", 1))
-            if depth not in (1, 2):
+            depth = get_depth(rg)
+            if depth > 3:
                 continue
 
             cg = rg.get(ckpt)
             if cg is None:
                 continue
 
-            def _load_vec(key):
-                if key not in cg:
-                    return None
-                ds = cg[key]
-                if ds.attrs.get("degenerate", False) or len(ds) == 0:
-                    return None
-                v = ds[:].astype(np.float32)
-                if not np.all(np.isfinite(v)):
-                    raise ValueError(f"{task}/{run_id}/{key}: NaN in RDM")
-                return v
-
-            k0 = f"layer_0_{metric}"
-            k1 = f"layer_1_{metric}"
             hp = {"run_id": run_id, "performance": perf}
             for k, v in rg.attrs.items():
                 if k.startswith("hp_"):
                     hp[k] = _hp_val(v)
 
-            if depth == 1:
-                v0 = _load_vec(k0)
-                if v0 is not None:
-                    d1.append({**hp, "vec": v0})
-            else:
-                v0 = _load_vec(k0)
-                v1 = _load_vec(k1)
-                if v0 is not None:
-                    d2l0.append({**hp, "vec": v0})
-                if v1 is not None:
-                    d2l1.append({**hp, "vec": v1})
+            for li in range(depth):
+                key_str = f"layer_{li}_{metric}"
+                if key_str not in cg:
+                    continue
+                ds = cg[key_str]
+                if ds.attrs.get("degenerate", False) or len(ds) == 0:
+                    continue
+                v = ds[:].astype(np.float32)
+                if not np.all(np.isfinite(v)):
+                    raise ValueError(f"{task}/{run_id}/{key_str}: NaN in RDM")
+                groups.setdefault((depth, li), []).append({**hp, "vec": v})
 
-    return d1, d2l0, d2l1
+    return groups
 
 
 def build_df(rows, task, depth_label, layer_idx):
@@ -285,8 +280,11 @@ def signed_eta(df, hp_attr, level_a, level_b, rdm_prop):
 
 
 def compute_effects(df, task):
-    is_rl  = task in RL_TASKS
-    cat_hps = CAT_HPS_RL if is_rl else CAT_HPS_SUPERVISED
+    is_rl    = task in RL_TASKS
+    is_cifar = task == "cifar10"
+    cat_hps  = (CAT_HPS_CIFAR if is_cifar else
+                CAT_HPS_RL    if is_rl    else
+                CAT_HPS_SUPERVISED)
     rows = []
 
     for prop in RDM_PROPS:
@@ -297,6 +295,8 @@ def compute_effects(df, task):
         for hp in CONT_HPS:
             if hp == "hp_batch_size" and is_rl:
                 continue
+            if is_cifar and hp == "hp_l1_reg":
+                continue   # CIFAR has no l1_reg
             if hp not in df.columns:
                 continue
             r = spearman_r(df[hp].values.astype(float), y)
@@ -314,10 +314,14 @@ def compute_effects(df, task):
 
 
 def hp_row_order(task):
-    is_rl  = task in RL_TASKS
-    cat_hps = CAT_HPS_RL if is_rl else CAT_HPS_SUPERVISED
+    is_rl    = task in RL_TASKS
+    is_cifar = task == "cifar10"
+    cat_hps  = (CAT_HPS_CIFAR if is_cifar else
+                CAT_HPS_RL    if is_rl    else
+                CAT_HPS_SUPERVISED)
     cont = [h for h in CONT_HPS
-            if not (h == "hp_batch_size" and is_rl)]
+            if not (h == "hp_batch_size" and is_rl)
+            and not (is_cifar and h == "hp_l1_reg")]
     cat  = [_hp_key(h, la, lb, cat_hps) for h, la, lb in cat_hps]
     return cont + cat
 
@@ -421,7 +425,7 @@ def make_layer_figure(effects_by_task, layer_label, vmax_global):
 # ---------------------------------------------------------------------------
 
 def main():
-    parser = argparse.ArgumentParser(description="Layer comparison for HP effects (depth=2 networks).")
+    parser = argparse.ArgumentParser(description="Layer comparison for HP effects (all depths).")
     parser.add_argument("--metric", choices=["cosine", "pearson"], default="cosine")
     args = parser.parse_args()
 
@@ -431,47 +435,35 @@ def main():
 
     thresholds = load_thresholds()
 
-    print("Loading networks (depth=1 and depth=2) ...")
-    # Three groups: (effects_dict, page_label, depth_label, layer_idx)
-    groups = [
-        ({}, "depth=1, layer_0  (only layer)",    "d1",  0),
-        ({}, "depth=2, layer_0  (first hidden)",  "d2l0", 0),
-        ({}, "depth=2, layer_1  (second hidden)", "d2l1", 1),
-    ]
+    print("Loading networks (depth=1, 2, 3) ...")
+    # effects_by_group: {(depth, layer_idx): {task: eff_df}}
+    effects_by_group = {}
     all_csv_rows = []
 
     for task in LAYER_TASKS:
-        d1_rows, d2l0_rows, d2l1_rows = load_all_depth_layers(
-            task, thresholds.get(task), metric=args.metric)
-
-        parts = [
-            (d1_rows,   "d1",   0, groups[0][0]),
-            (d2l0_rows, "d2l0", 0, groups[1][0]),
-            (d2l1_rows, "d2l1", 1, groups[2][0]),
-        ]
-        n_parts = [len(r) for r, *_ in parts]
-        if not any(n_parts):
+        groups = load_all_depth_layers(task, thresholds.get(task), metric=args.metric)
+        if not groups:
             print(f"  [skip] {task}: no networks loaded")
             continue
 
-        rel_means = []
-        for rows, depth_label, layer_idx, effects_dict in parts:
+        rel_strs = []
+        for (depth, layer_idx), rows in sorted(groups.items()):
+            depth_label = f"d{depth}l{layer_idx}"
             df = build_df(rows, task, depth_label, layer_idx)
             if df is None or len(df) < 10:
-                rel_means.append(f"{depth_label}=—")
+                rel_strs.append(f"{depth_label}=—")
                 continue
-            rel_means.append(f"{depth_label}={df['reliability'].mean():.3f}")
+            rel_strs.append(f"{depth_label}={df['reliability'].mean():.3f}")
             eff = pd.DataFrame(compute_effects(df, task))
             if len(eff):
-                effects_dict[task] = eff
+                effects_by_group.setdefault((depth, layer_idx), {})[task] = eff
             for _, row in eff.iterrows():
                 all_csv_rows.append({**row, "task": task,
                                      "depth_label": depth_label, "layer": layer_idx})
 
-        print(f"  {task}: N={n_parts}  LOO r: {',  '.join(rel_means)}")
+        print(f"  {task}: {',  '.join(rel_strs)}")
 
-    # Shared colour scale across all three groups
-    all_eff_dfs = [df for ed, *_ in groups for df in ed.values()]
+    all_eff_dfs = [df for ed in effects_by_group.values() for df in ed.values()]
     if not all_eff_dfs:
         print("No effects computed — nothing to plot.")
         return
@@ -480,11 +472,21 @@ def main():
     ))
     print(f"\nGlobal |effect| max: {vmax_global:.2f}")
 
+    # Generate one PDF page per (depth, layer_idx) group
+    layer_labels = {
+        (1, 0): "depth=1, layer_0  (only layer)",
+        (2, 0): "depth=2, layer_0  (first hidden)",
+        (2, 1): "depth=2, layer_1  (second hidden)",
+        (3, 0): "depth=3, layer_0  (first hidden)",
+        (3, 1): "depth=3, layer_1  (middle hidden)",
+        (3, 2): "depth=3, layer_2  (third hidden)",
+    }
+
     pdf_path = out_figures / "f2_layer_comparison.pdf"
     with PdfPages(pdf_path) as pdf:
-        for effects_dict, label, *_ in groups:
-            if not effects_dict:
-                continue
+        for key in sorted(effects_by_group.keys()):
+            effects_dict = effects_by_group[key]
+            label = layer_labels.get(key, f"depth={key[0]}, layer_{key[1]}")
             fig = make_layer_figure(effects_dict, label, vmax_global)
             pdf.savefig(fig, bbox_inches="tight")
             plt.close(fig)

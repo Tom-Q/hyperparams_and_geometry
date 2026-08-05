@@ -107,6 +107,22 @@ COMPOSITE_DEFS = {
             ("hp_l2_reg",        "cont", +1),
         ],
     },
+    # CIFAR-10: no optimizer/init_scale/l1_reg; has use_batchnorm; depth has 3 levels (cont)
+    "cifar": {
+        "stability": [
+            ("hp_learning_rate", "cont", -1),
+            ("hp_batch_size",    "cont", +1),
+            ("hp_l2_reg",        "cont", +1),
+            ("hp_use_batchnorm", "cat",  {"0": -1, "1": +1}),
+        ],
+        "capacity": [
+            ("hp_hidden_size",   "cont", +1),
+            ("hp_depth",         "cat",  {"1": -1, "2": 0, "3": +1}),
+        ],
+        "regularization": [
+            ("hp_l2_reg",        "cont", +1),
+        ],
+    },
 }
 
 RDM_PROPS = ["reliability", "category_corr", "dimensionality", "mean_dissimilarity"]
@@ -121,6 +137,7 @@ PARADIGMS = [
     ("Supervised", ["mnist_dual", "mnist_10way", "fashion_10way", "spirals", "parity"]),
     ("RNN",        ["adding", "mnist_rnn"]),
     ("RL",         ["cartpole", "fourrooms"]),
+    ("CIFAR",      ["cifar10"]),
 ]
 
 TASK_SHORT = {
@@ -133,6 +150,7 @@ TASK_SHORT = {
     "mnist_rnn":     "MNIST\nRNN",
     "cartpole":      "CartPole",
     "fourrooms":     "FourRooms",
+    "cifar10":       "CIFAR-10",
 }
 
 
@@ -141,6 +159,8 @@ TASK_SHORT = {
 # ---------------------------------------------------------------------------
 
 def get_paradigm(task):
+    if task == "cifar10":
+        return "cifar"
     if task in RNN_TASKS:
         return "rnn"
     if task in RL_TASKS:

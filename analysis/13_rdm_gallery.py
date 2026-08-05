@@ -25,7 +25,7 @@ ANALYSIS = Path(__file__).parent
 sys.path.insert(0, str(ANALYSIS))
 from analysis_utils import (
     CACHE_DIR, FIGURES_DIR, RDM_DIR, TABLES_DIR, TASK_NAMES, RL_TASKS,
-    metric_output_dirs,
+    metric_output_dirs, get_depth,
 )
 from plot_utils import plot_rdm, vec_to_rdm
 
@@ -189,7 +189,7 @@ def load_task_rdms(task, success_threshold=None, metric="cosine"):
             perf = float(rg.attrs.get("performance", float("nan")))
             if success_threshold is not None and perf < success_threshold:
                 continue
-            depth = int(rg.attrs.get("hp_depth", 1))
+            depth = get_depth(rg)
             ckpt_grp = rg.get(ckpt)
             if ckpt_grp is None:
                 continue

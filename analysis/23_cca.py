@@ -54,12 +54,14 @@ TASK_SHORT = {
     "mnist_rnn":     "MNIST\nRNN",
     "cartpole":      "CartPole",
     "fourrooms":     "FourRooms",
+    "cifar10":       "CIFAR-10",
 }
 
 PARADIGMS = [
     ("Supervised", ["mnist_dual", "mnist_10way", "fashion_10way", "spirals", "parity"]),
     ("RNN",        ["adding", "mnist_rnn"]),
     ("RL",         ["cartpole", "fourrooms"]),
+    ("CIFAR",      ["cifar10"]),
 ]
 
 RDM_PROPS = ["reliability", "category_corr", "dimensionality", "mean_dissimilarity"]
@@ -104,12 +106,21 @@ COMPOSITE_DEFS = {
                            ("hp_depth","cat",{"1":-1,"2":+1})],
         "regularization": [("hp_l1_reg","cont",+1),("hp_l2_reg","cont",+1)],
     },
+    "cifar": {
+        "stability":      [("hp_learning_rate","cont",-1),("hp_batch_size","cont",+1),
+                           ("hp_l2_reg","cont",+1),
+                           ("hp_use_batchnorm","cat",{"0":-1,"1":+1})],
+        "capacity":       [("hp_hidden_size","cont",+1),
+                           ("hp_depth","cat",{"1":-1,"2":0,"3":+1})],
+        "regularization": [("hp_l2_reg","cont",+1)],
+    },
 }
 
 
 def get_paradigm(task):
-    if task in RNN_TASKS: return "rnn"
-    if task in RL_TASKS:  return "rl"
+    if task == "cifar10":  return "cifar"
+    if task in RNN_TASKS:  return "rnn"
+    if task in RL_TASKS:   return "rl"
     return "supervised"
 
 
@@ -188,25 +199,38 @@ def build_hp_X(df, task):
     if not is_rl:
         add_cont("hp_batch_size", "batch\nsize")
 
-    # Binary categoricals
-    add_bin("hp_optimizer",  "optimizer\n(adam=+1)",  "adam")
-    add_bin("hp_init_scale", "init_scale\n(0.1=+1)",  "0.1")
+    is_cifar = task == "cifar10"
 
-    if is_rnn:
-        add_bin("hp_cell_type",    "cell_type\n(gru=+1)", "gru")
-        add_bin("hp_n_rnn_layers", "n_rnn_layers\n(2=+1)", "2")
+    if is_cifar:
+        # CIFAR: no optimizer/init_scale; use_batchnorm (0=F, 1=T); depth 3-level cont; relu/tanh binary
+        add_bin("hp_use_batchnorm", "use_batchnorm\n(T=+1)", "1")
+        add_bin("hp_activation",    "activation\n(tanh=+1)",  "tanh")
+        # depth: 3 levels → treat as continuous score (1→-1, 2→0, 3→+1)
+        if "hp_depth" in df.columns:
+            d_str = _col_to_str(df["hp_depth"])
+            depth_score = d_str.map({"1": -1.0, "2": 0.0, "3": 1.0}).astype(float)
+            cols.append(depth_score.values)
+            labels.append("depth\n(1→3)")
     else:
-        add_bin("hp_depth", "depth\n(2=+1)", "2")
-        # Activation: two Helmert contrasts
-        if "hp_activation" in df.columns:
-            act = _col_to_str(df["hp_activation"])
-            # H1: relu vs sigmoid (tanh neutral)
-            h1 = np.where(act=="relu", -1.0, np.where(act=="sigmoid", 1.0, 0.0))
-            # H2: tanh vs (relu+sigmoid)
-            h2 = np.where(act=="tanh", 2.0, -1.0)
-            cols.append(h1.astype(float))
-            cols.append(h2.astype(float))
-            labels.extend(["act:\nrelu↔sig", "act:\ntanh↔oth"])
+        # Binary categoricals for supervised/RNN/RL
+        add_bin("hp_optimizer",  "optimizer\n(adam=+1)",  "adam")
+        add_bin("hp_init_scale", "init_scale\n(0.1=+1)",  "0.1")
+
+        if is_rnn:
+            add_bin("hp_cell_type",    "cell_type\n(gru=+1)", "gru")
+            add_bin("hp_n_rnn_layers", "n_rnn_layers\n(2=+1)", "2")
+        else:
+            add_bin("hp_depth", "depth\n(2=+1)", "2")
+            # Activation: two Helmert contrasts
+            if "hp_activation" in df.columns:
+                act = _col_to_str(df["hp_activation"])
+                # H1: relu vs sigmoid (tanh neutral)
+                h1 = np.where(act=="relu", -1.0, np.where(act=="sigmoid", 1.0, 0.0))
+                # H2: tanh vs (relu+sigmoid)
+                h2 = np.where(act=="tanh", 2.0, -1.0)
+                cols.append(h1.astype(float))
+                cols.append(h2.astype(float))
+                labels.extend(["act:\nrelu↔sig", "act:\ntanh↔oth"])
 
     if not cols:
         return None, [], np.zeros(len(df), dtype=bool)

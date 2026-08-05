@@ -40,6 +40,7 @@ TASK_NAMES = [
     "mnist_dual", "mnist_10way", "fashion_10way", "spirals", "parity",
     "adding", "mnist_rnn",
     "cartpole", "fourrooms",
+    "cifar10",
 ]
 
 # Expected total observations per task (used for inventory completeness checks)
@@ -53,10 +54,35 @@ TASK_EXPECTED_OBS = {
     "mnist_rnn":      200,
     "cartpole":      1000,
     "fourrooms":     1000,
+    "cifar10":       1000,
 }
 
 # RL tasks save final.npz (training ends at best performance); others save best.npz
 RL_TASKS = {"cartpole", "fourrooms"}
+
+
+# ---------------------------------------------------------------------------
+# Depth helpers
+# ---------------------------------------------------------------------------
+
+def get_depth(rg) -> int:
+    """Return depth (number of hidden FC layers) from an HDF5 run group.
+
+    All tasks store this as hp_depth. The HDF5 writer normalises CIFAR's
+    n_fc_layers → depth at write time, but this fallback handles any HDF5
+    written before that normalisation was in place.
+    """
+    return int(rg.attrs.get("hp_depth", rg.attrs.get("hp_n_fc_layers", 1)))
+
+
+def get_depth_from_config(config: dict) -> int:
+    """Return depth from a metadata.json config dict.
+
+    Other tasks use key 'depth'; CIFAR uses 'n_fc_layers'.
+    metadata.json is never rewritten, so we must check both.
+    """
+    d = config.get("depth") if config.get("depth") is not None else config.get("n_fc_layers")
+    return int(d) if d is not None else 1
 
 
 # ---------------------------------------------------------------------------
