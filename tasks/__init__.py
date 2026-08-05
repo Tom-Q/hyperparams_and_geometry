@@ -9,6 +9,7 @@ from .fourrooms import FourRoomsTask
 from .mnist_rnn import MNISTRNNTask
 from .adding import AddingTask
 from .cifar10 import Cifar10Task
+from .qbert import QbertTask
 
 TASKS: dict[str, type] = {
     "mnist_dual":    MNISTDualTask,
@@ -21,10 +22,12 @@ TASKS: dict[str, type] = {
     "mnist_rnn":     MNISTRNNTask,
     "adding":        AddingTask,
     "cifar10":       Cifar10Task,
+    "qbert":         QbertTask,
 }
 
 __all__ = ["TASKS", "Task",
            "MNISTDualTask", "MNIST10WayTask", "Fashion10WayTask",
            "SpiralsTask", "ParityTask",
            "CartPoleTask", "FourRoomsTask",
-           "MNISTRNNTask", "AddingTask", "Cifar10Task"]
+           "MNISTRNNTask", "AddingTask", "Cifar10Task",
+           "QbertTask"]
