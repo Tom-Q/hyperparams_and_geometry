@@ -78,4 +78,5 @@ class QbertTask(Task):
             ("learning_rate", 0.0001, 0.001),
             ("entropy_coef",  0.005,  0.1),
             ("gamma",         0.98,   0.995),
+            ("hidden_size",   256,    768),    # log scale
         ]

@@ -22,7 +22,13 @@ from torch.distributions import Categorical
 import gymnasium as gym
 
 
-STEP_CHECKPOINTS = frozenset({1, 4, 16, 64, 256, 1024, 2048, 3072, 4096, 5120, 6144, 7168})
+STEP_CHECKPOINTS    = frozenset({1, 4, 16, 64, 256, 1024, 2048, 3072, 4096, 5120, 6144, 7168})
+QBERT_LEVEL_RAM_ADDR = 99   # RAM byte storing cumulative levels-completed count (addr 57 wraps at level 5)
+TRACKED_LEVELS       = tuple(range(2, 21))
+
+SUCCESS_LEVEL  = 5          # level that must be reached to declare success
+SUCCESS_FRAC   = 0.5        # fraction of eval episodes that must reach SUCCESS_LEVEL
+PATIENCE_STEPS = 10_000_000 # stop if eval_mean hasn't improved in this many env steps
 
 PERF_THRESHOLDS = {
     0.025: "0p025",
@@ -102,7 +108,7 @@ class SpatialAttentionModule(nn.Module):
 
 class ImprovedA2CNetwork(nn.Module):
     def __init__(self, input_shape, num_actions, use_attention=False, use_residual=False,
-                 use_aux=False, use_batch_norm=False):
+                 use_aux=False, use_batch_norm=False, hidden_size=512, depth=1):
         super(ImprovedA2CNetwork, self).__init__()
 
         self.input_shape = input_shape
@@ -111,6 +117,8 @@ class ImprovedA2CNetwork(nn.Module):
         self.use_residual = use_residual
         self.use_aux = use_aux
         self.use_batch_norm = use_batch_norm
+        self.hidden_size = hidden_size
+        self.depth = depth
 
         self.conv1 = nn.Conv2d(input_shape[0], 32, kernel_size=8, stride=4)
         self.conv2 = nn.Conv2d(32, 64, kernel_size=4, stride=2)
@@ -134,20 +142,26 @@ class ImprovedA2CNetwork(nn.Module):
         conv_out_size = 3136
 
         self.perception_fc = nn.Sequential(
-            nn.Linear(conv_out_size, 512),
-            nn.LayerNorm(512) if use_batch_norm else nn.Identity(),
+            nn.Linear(conv_out_size, hidden_size),
+            nn.LayerNorm(hidden_size) if use_batch_norm else nn.Identity(),
             nn.Tanh()
         )
 
+        self.fc2 = (nn.Sequential(
+            nn.Linear(hidden_size, hidden_size),
+            nn.LayerNorm(hidden_size) if use_batch_norm else nn.Identity(),
+            nn.Tanh()
+        ) if depth >= 2 else None)
+
         self.policy_net = nn.Sequential(
-            nn.Linear(512, 64),
+            nn.Linear(hidden_size, 64),
             nn.LayerNorm(64) if use_batch_norm else nn.Identity(),
             nn.Tanh(),
             nn.Linear(64, num_actions)
         )
 
         self.value_net = nn.Sequential(
-            nn.Linear(512, 64),
+            nn.Linear(hidden_size, 64),
             nn.LayerNorm(64) if use_batch_norm else nn.Identity(),
             nn.Tanh(),
             nn.Linear(64, 1)
@@ -172,6 +186,8 @@ class ImprovedA2CNetwork(nn.Module):
             policy_modules = [m for m in self.policy_net.modules() if isinstance(m, (nn.Conv2d, nn.Linear))]
             value_modules  = [m for m in self.value_net.modules()  if isinstance(m, (nn.Conv2d, nn.Linear))]
             perception_modules = [m for m in self.perception_fc.modules() if isinstance(m, (nn.Conv2d, nn.Linear))]
+            if self.fc2 is not None:
+                perception_modules += [m for m in self.fc2.modules() if isinstance(m, (nn.Conv2d, nn.Linear))]
 
             if module in policy_modules:
                 gain = 0.01 if module is policy_modules[-1] else 5.0/3
@@ -196,42 +212,22 @@ class ImprovedA2CNetwork(nn.Module):
         if self.use_attention:
             x = self.attention(x)
 
-        features   = x.view(x.size(0), -1)
-        perception = self.perception_fc(features)
+        features = x.view(x.size(0), -1)
+        layer0   = self.perception_fc(features)
+        layer1   = self.fc2(layer0) if self.fc2 is not None else None
+        out      = layer1 if layer1 is not None else layer0
 
-        if return_activations:
-            policy_hidden = perception
-            for layer in self.policy_net[:-1]:
-                policy_hidden = layer(policy_hidden)
-            action_hidden  = policy_hidden
-            action_logits  = self.policy_net[-1](policy_hidden)
-            action_probabilities = F.softmax(action_logits, dim=1)
-
-            value_hidden = perception
-            for layer in self.value_net[:-1]:
-                value_hidden = layer(value_hidden)
-            value = self.value_net[-1](value_hidden)
-
-            if self.use_aux:
-                next_frame       = self.next_frame_predictor(features)
-                predicted_reward = self.reward_predictor(features)
-            else:
-                next_frame = predicted_reward = None
-
-            return action_probabilities, value, perception, action_hidden, value_hidden, next_frame, action_logits, predicted_reward
-
+        if self.use_aux:
+            next_frame       = self.next_frame_predictor(features)
+            predicted_reward = self.reward_predictor(features)
         else:
-            action_logits        = self.policy_net(perception)
-            action_probabilities = F.softmax(action_logits, dim=1)
-            value                = self.value_net(perception)
+            next_frame = predicted_reward = None
 
-            if self.use_aux:
-                next_frame       = self.next_frame_predictor(features)
-                predicted_reward = self.reward_predictor(features)
-            else:
-                next_frame = predicted_reward = None
+        action_logits        = self.policy_net(out)
+        action_probabilities = F.softmax(action_logits, dim=1)
+        value                = self.value_net(out)
 
-            return action_probabilities, value, features, next_frame, predicted_reward
+        return action_probabilities, value, features, next_frame, predicted_reward
 
     def get_action_and_value(self, x, deterministic=False):
         policy, value, _, _, _ = self(x)
@@ -337,6 +333,8 @@ class ImprovedA2CAgent:
             use_aux: bool = False,
             use_batch_norm: bool = False,
             use_ppo: bool = True,
+            hidden_size: int = 512,
+            depth: int = 1,
             save_name="ImprovedA2CAgent",
             run_dir: Path = None,
             stimuli_t: torch.Tensor = None,
@@ -375,6 +373,8 @@ class ImprovedA2CAgent:
                 use_residual   = use_residual,
                 use_aux        = use_aux,
                 use_batch_norm = self.use_batch_norm,
+                hidden_size    = hidden_size,
+                depth          = depth,
             ).to(device)
 
             if use_rnd:
@@ -403,6 +403,14 @@ class ImprovedA2CAgent:
             self.episode_rewards   = [0 for _ in range(num_envs)]
             self.reward_ema              = None  # EMA of raw episode rewards (alpha=0.01 per episode)
             self.perf_thresholds_crossed = set()  # normalised thresholds already saved as perf_X.npz
+
+            self._log_path = run_dir / "training_log.csv"
+            level_cols = ",".join(
+                f"frac_level{L},steps_to_level{L}_mean,steps_to_level{L}_std"
+                for L in TRACKED_LEVELS
+            )
+            with open(self._log_path, "w") as f:
+                f.write(f"step,eval_mean,eval_std,ema_reward,{level_cols}\n")
 
     def _make_envs(self, env_name, num_envs):
         from gymnasium.vector import SyncVectorEnv
@@ -434,22 +442,34 @@ class ImprovedA2CAgent:
         return torch.sign(rewards).float()
 
     def _save_activations(self, path, step=None):
-        """Save perception_fc outputs over stimuli, with step and rolling avg reward."""
+        """Save FC layer activations over stimuli, with step and rolling avg reward."""
         if self.stimuli_t is None:
             return
-        self.network.eval()
+        net = self.network
+        net.eval()
         with torch.no_grad():
-            _, _, perception, _, _, _, _, _ = self.network(
-                self.stimuli_t.to(self.device), return_activations=True
-            )
-        np.savez_compressed(
-            str(path),
-            layer_0=np.array(perception.cpu().numpy(), dtype=np.float32),
-            step=np.array(self.total_steps if step is None else step, dtype=np.int64),
-            avg_reward=np.array(self.reward_ema if self.reward_ema is not None else np.nan,
-                                dtype=np.float32),
+            x = self.stimuli_t.to(self.device)
+            x = F.relu(net.bn1(net.conv1(x)))
+            x = F.relu(net.bn2(net.conv2(x)))
+            x = F.relu(net.bn3(net.conv3(x)))
+            if net.use_residual:
+                x = net.residual(x)
+            if net.use_attention:
+                x = net.attention(x)
+            flat   = x.view(x.size(0), -1)
+            layer0 = net.perception_fc(flat)
+            layer1 = net.fc2(layer0) if net.fc2 is not None else None
+
+        arrays = dict(
+            layer_0    = layer0.cpu().numpy().astype(np.float32),
+            step       = np.array(self.total_steps if step is None else step, dtype=np.int64),
+            avg_reward = np.array(self.reward_ema if self.reward_ema is not None else np.nan,
+                                  dtype=np.float32),
         )
-        self.network.train()
+        if layer1 is not None:
+            arrays["layer_1"] = layer1.cpu().numpy().astype(np.float32)
+        np.savez_compressed(str(path), **arrays)
+        net.train()
 
     def collect_rollouts(self):
         if not hasattr(self, 'current_states'):
@@ -645,10 +665,15 @@ class ImprovedA2CAgent:
 
         self.network.eval()
         all_rewards = []
+        ale = eval_env.unwrapped.ale
+        # steps_to_level[L] = list of step counts when level L was first reached, per episode
+        steps_to_level = {L: [] for L in TRACKED_LEVELS}
 
         for episode in range(num_episodes):
             state, _ = eval_env.reset()
             episode_reward = 0
+            ep_step = 0
+            current_level = 1
             done = False
 
             while not done:
@@ -659,11 +684,20 @@ class ImprovedA2CAgent:
                               else Categorical(policy).sample()).cpu().numpy()[0]
                 state, reward, terminated, truncated, _ = eval_env.step(action)
                 episode_reward += reward
+                ep_step += 1
+
+                new_level = int(ale.getRAM()[QBERT_LEVEL_RAM_ADDR]) + 1
+                if new_level > current_level:
+                    for L in TRACKED_LEVELS:
+                        if L == new_level:
+                            steps_to_level[L].append(ep_step)
+                    current_level = new_level
+
                 done = terminated or truncated
 
             all_rewards.append(episode_reward)
             if verbose:
-                print(f"Episode {episode+1}/{num_episodes}: {episode_reward:.1f}")
+                print(f"Episode {episode+1}/{num_episodes}: {episode_reward:.1f}  max_level={current_level}")
 
         eval_env.close()
 
@@ -681,8 +715,21 @@ class ImprovedA2CAgent:
                 self.perf_thresholds_crossed.add(thr)
                 self._save_activations(self.run_dir / f"perf_{name}")
 
+        ema = self.reward_ema if self.reward_ema is not None else float('nan')
+        frac_success_level = len(steps_to_level[SUCCESS_LEVEL]) / num_episodes
+        level_vals = []
+        for L in TRACKED_LEVELS:
+            reached = steps_to_level[L]
+            frac = len(reached) / num_episodes
+            mean_steps = float(np.mean(reached)) if reached else float('nan')
+            std_steps  = float(np.std(reached))  if reached else float('nan')
+            level_vals.extend([f"{frac:.3f}", f"{mean_steps:.1f}", f"{std_steps:.1f}"])
+        with open(self._log_path, "a") as f:
+            f.write(f"{self.total_steps},{mean_reward:.2f},{std_reward:.2f},{ema:.2f},"
+                    + ",".join(level_vals) + "\n")
+
         self.network.train()
-        return mean_reward, std_reward
+        return mean_reward, std_reward, frac_success_level
 
     def train(self, total_timesteps, eval_freq=200_000, log_freq=10_000):
         rollout_size = self.n_steps * self.num_envs
@@ -691,6 +738,8 @@ class ImprovedA2CAgent:
 
         best_train_reward = -float('inf')
         avg_train_reward  = 0
+        steps_at_last_improvement = None  # set on first eval (which always improves from -inf)
+        stop_reason = "completed"
 
         for update in range(num_updates):
             rollout_data, train_info = self.collect_rollouts()
@@ -708,22 +757,41 @@ class ImprovedA2CAgent:
                       f"steps={self.total_steps:>12,}  avg_ep={avg_train_reward:.1f}", flush=True)
 
             if self.total_steps % eval_freq < rollout_size:
-                mean_reward, std_reward = self.evaluate()
+                prev_best = self.best_mean_reward
+                mean_reward, std_reward, frac_success = self.evaluate()
                 print(f"  [eval] steps={self.total_steps:,}  "
                       f"score={mean_reward:.1f}±{std_reward:.1f}  "
-                      f"best={self.best_mean_reward:.1f}", flush=True)
+                      f"best={self.best_mean_reward:.1f}  "
+                      f"frac_level{SUCCESS_LEVEL}={frac_success:.2f}", flush=True)
+
+                if self.best_mean_reward > prev_best:
+                    steps_at_last_improvement = self.total_steps
+
+                if frac_success >= SUCCESS_FRAC:
+                    print(f"  [early stop] SUCCESS: level {SUCCESS_LEVEL} reached in "
+                          f"{frac_success:.0%} of episodes at step {self.total_steps:,}", flush=True)
+                    stop_reason = "success"
+                    break
+
+                if (steps_at_last_improvement is not None and
+                        self.total_steps - steps_at_last_improvement >= PATIENCE_STEPS):
+                    print(f"  [early stop] PATIENCE: no improvement for "
+                          f"{self.total_steps - steps_at_last_improvement:,} steps", flush=True)
+                    stop_reason = "patience"
+                    break
 
             update_count = update + 1  # 1-indexed
             if update_count in STEP_CHECKPOINTS:
                 self._save_activations(self.run_dir / f"step_{update_count:07d}", step=self.total_steps)
 
-        # Final evaluation and checkpoint
-        mean_reward, std_reward = self.evaluate(num_episodes=30)
-        print(f"  [final eval] score={mean_reward:.1f}±{std_reward:.1f}", flush=True)
+        # Final evaluation and checkpoint (always runs, even on early stop)
+        mean_reward, std_reward, _ = self.evaluate(num_episodes=30)
+        print(f"  [final eval] score={mean_reward:.1f}±{std_reward:.1f}  "
+              f"stop_reason={stop_reason}", flush=True)
         self._save_activations(self.run_dir / "final")
         self.envs.close()
 
-        return float(self.best_mean_reward)
+        return float(self.best_mean_reward), stop_reason
 
 
 def train_network(config, run_dir, stimuli_array, total_steps=60_000_000,
@@ -747,23 +815,25 @@ def train_network(config, run_dir, stimuli_array, total_steps=60_000_000,
         use_attention  = bool(config.get("use_attention",  False)),
         use_residual   = bool(config.get("use_residual",   False)),
         use_ppo        = True,
+        hidden_size    = int(config.get("hidden_size", 512)),
+        depth          = int(config.get("depth", 1)),
         run_dir        = run_dir,
         stimuli_t      = stimuli_t,
         device         = device,
     )
 
     t0 = time.time()
-    best_score = agent.train(total_timesteps=total_steps)
+    best_score, stop_reason = agent.train(total_timesteps=total_steps)
 
     metadata = {
-        "task":    "qbert",
+        "task":     "qbert",
         "paradigm": "qbert",
         "config": {
             **{k: (bool(v) if isinstance(v, (bool, np.bool_)) else v) for k, v in config.items()},
-            "depth": 1,   # tells analysis scripts to use layer_0
         },
         "best_metric":     round(best_score, 2),
         "final_step":      agent.total_steps,
+        "stop_reason":     stop_reason,
         "training_time_s": round(time.time() - t0, 1),
     }
 

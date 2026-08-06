@@ -20,7 +20,6 @@ run this script with --update-bo-state to append all completed metadata.
 import argparse
 import json
 import sys
-from itertools import product as iproduct
 from pathlib import Path
 
 import numpy as np
@@ -35,46 +34,52 @@ BO_STATE_PATH = OUTPUT_DIR / "bo_state.json"
 
 # ─── Hyperparameter grid ──────────────────────────────────────────────────────
 #
-# 24 analysis networks: 8 categorical combos × 3 continuous points each.
-# 24 Sobol points are drawn in 3D continuous space, shuffled, then assigned
-# 3 per categorical combo — each combo gets distinct continuous values.
+# 24 analysis networks: 8D Sobol, 24 draws.
+# All hyperparameters sampled jointly. Continuous dims mapped via log/linear
+# scale; boolean dims thresholded at 0.5.
 #
-# Continuous ranges:
-#   learning_rate : [1e-4, 1e-3]  log scale
-#   entropy_coef  : [5e-3, 5e-2]  log scale
-#   gamma         : [0.98, 0.995] linear
+# Dimensions:
+#   0  learning_rate  : [1e-4, 1e-3]  log scale
+#   1  entropy_coef   : [5e-3, 1e-1]  log scale
+#   2  gamma          : [0.98, 0.995] linear
+#   3  width_mult     : [0.5, 2.0]    log scale  -> hidden_size = round(512 * mult)
+#   4  use_batch_norm : >= 0.5 -> True
+#   5  use_attention  : >= 0.5 -> True
+#   6  use_residual   : >= 0.5 -> True
+#   7  depth          : >= 0.5 -> 2, else 1
 
-_LR_LO,    _LR_HI    = 1e-4,  1e-3
-_ENT_LO,   _ENT_HI   = 5e-3,  1e-1
-_GAMMA_LO, _GAMMA_HI = 0.98,  0.995
+_LR_LO,     _LR_HI     = 1e-4, 1e-3
+_ENT_LO,    _ENT_HI    = 5e-3, 1e-1
+_GAMMA_LO,  _GAMMA_HI  = 0.98, 0.995
+_HIDDEN_LO, _HIDDEN_HI = 256,  768
 
-_engine = torch.quasirandom.SobolEngine(dimension=3, scramble=True, seed=42)
+_engine = torch.quasirandom.SobolEngine(dimension=8, scramble=True, seed=42)
 _pts    = _engine.draw(24).numpy()
-_pts    = _pts[np.random.default_rng(42).permutation(24)]
 
 def _logmap(lo, hi, u): return float(f"{np.exp(np.log(lo) + u * (np.log(hi) - np.log(lo))):.6g}")
 def _linmap(lo, hi, u): return float(f"{lo + u * (hi - lo):.4f}")
 
-_CATEGORICAL_COMBOS = list(iproduct([True, False], repeat=3))  # 8 combos
-
-ANALYSIS_CONFIGS = [
-    {
-        "learning_rate":  _logmap(_LR_LO, _LR_HI,    _pts[combo_i * 3 + pt_i][0]),
-        "entropy_coef":   _logmap(_ENT_LO, _ENT_HI,  _pts[combo_i * 3 + pt_i][1]),
-        "gamma":          _linmap(_GAMMA_LO, _GAMMA_HI, _pts[combo_i * 3 + pt_i][2]),
-        "use_batch_norm": bn,
-        "use_attention":  attn,
-        "use_residual":   res,
+def _make_config(u):
+    return {
+        "learning_rate":  _logmap(_LR_LO,     _LR_HI,     u[0]),
+        "entropy_coef":   _logmap(_ENT_LO,    _ENT_HI,    u[1]),
+        "gamma":          _linmap(_GAMMA_LO,  _GAMMA_HI,  u[2]),
+        "hidden_size":    int(round(_logmap(_HIDDEN_LO, _HIDDEN_HI, u[3]))),
+        "use_batch_norm": bool(u[4] >= 0.5),
+        "use_attention":  bool(u[5] >= 0.5),
+        "use_residual":   bool(u[6] >= 0.5),
+        "depth":          2 if u[7] >= 0.5 else 1,
     }
-    for combo_i, (bn, attn, res) in enumerate(_CATEGORICAL_COMBOS)
-    for pt_i in range(3)
-]
+
+ANALYSIS_CONFIGS = [_make_config(u) for u in _pts]
 
 # Model network — trained first, used only for stimulus extraction
 MODEL_CONFIG = {
     "learning_rate": 0.0003,
     "entropy_coef":  0.01,
     "gamma":         0.99,
+    "hidden_size":   512,
+    "depth":         1,
     "use_batch_norm": True,
     "use_attention":  True,
     "use_residual":   True,
@@ -136,6 +141,8 @@ def main():
 
     parser.add_argument("--repeat",    type=int, default=0,
                         help="Repeat index (0 = primary run, 1+ = re-runs for variability estimation)")
+    parser.add_argument("--overwrite", action="store_true",
+                        help="Allow writing into a run directory that already has a metadata.json")
     parser.add_argument("--dry-run",   action="store_true", help="Print config and exit")
     parser.add_argument("--max-steps", type=int, default=None,
                         help="Override total_steps (for smoke tests)")
@@ -168,6 +175,11 @@ def main():
         run_dir   = output_dir / f"run_{args.run_index:04d}_r{args.repeat}"
         run_index = args.run_index
         label     = f"analysis network #{args.run_index} (repeat {args.repeat})"
+
+    if (run_dir / "metadata.json").exists() and not args.overwrite:
+        print(f"ERROR: {run_dir} already has a metadata.json.")
+        print("       Use --overwrite to write into this directory anyway.")
+        sys.exit(1)
 
     print(f"Q*bert {label}")
     print(f"  run_dir : {run_dir}")
