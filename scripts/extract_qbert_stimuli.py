@@ -20,6 +20,10 @@ Output:
       levels       : (48,) int32
       frame_types  : (48,) str     — 'start', 'end', 'intermediate'
       source_nets  : (48,) str
+    output/production/qbert/stimuli_images/
+      overview.png                      — 4×12 grid (rows=levels, cols=stimuli per level)
+      00_lvl1_start_run_model_r1.png    — individual stimuli (most recent frame, channel 3)
+      ...
 """
 
 import argparse
@@ -28,6 +32,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from PIL import Image, ImageDraw, ImageFont
 from torch.distributions import Categorical
 
 REPO_ROOT = Path(__file__).parent.parent
@@ -151,6 +156,61 @@ def sample_intermediates(frames, n):
     return [interior[i] for i in indices]
 
 
+def save_images(inputs_arr, levels_arr, types_arr, nets_arr, out_dir):
+    """Save individual PNGs and a 4×12 overview grid."""
+    img_dir = out_dir / "stimuli_images"
+    img_dir.mkdir(exist_ok=True)
+
+    SCALE   = 3          # upscale 84→252 px for legibility
+    LABEL_H = 14         # pixels for text label below each cell
+    CELL_W  = 84 * SCALE
+    CELL_H  = 84 * SCALE + LABEL_H
+    COLS    = 12         # stimuli per level
+    ROWS    = 4          # levels
+
+    # Short label: type initial + net suffix
+    _net_suffix = {"run_model_test1": "t1", "run_model_r0": "r0", "run_model_r1": "r1"}
+    _type_label = {"start": "S", "end": "E", "intermediate": "I"}
+
+    def frame_to_img(arr):
+        frame = arr[3]  # most recent channel
+        px = (frame * 255).clip(0, 255).astype(np.uint8)
+        return Image.fromarray(px, mode="L").resize(
+            (CELL_W, 84 * SCALE), resample=Image.NEAREST
+        )
+
+    # Individual images
+    for i, (inp, lvl, ft, net) in enumerate(zip(inputs_arr, levels_arr, types_arr, nets_arr)):
+        name = f"{i:02d}_lvl{lvl}_{ft}_{net}.png"
+        frame_to_img(inp).save(img_dir / name)
+
+    # Overview grid: rows = levels (1-4), within each row order is start, end, inter×10
+    try:
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", 10)
+    except Exception:
+        font = ImageFont.load_default()
+
+    grid = Image.new("L", (COLS * CELL_W, ROWS * CELL_H), color=40)
+    draw = ImageDraw.Draw(grid)
+
+    # Group by level, preserving order within each level
+    level_indices = {L: [] for L in range(1, 5)}
+    for i, lvl in enumerate(levels_arr):
+        level_indices[int(lvl)].append(i)
+
+    for row, lvl in enumerate(range(1, 5)):
+        idxs = level_indices[lvl]
+        assert len(idxs) == COLS, f"Expected {COLS} stimuli for level {lvl}, got {len(idxs)}"
+        for col, idx in enumerate(idxs):
+            x, y = col * CELL_W, row * CELL_H
+            grid.paste(frame_to_img(inputs_arr[idx]), (x, y))
+            label = f"{_type_label[types_arr[idx]]}{_net_suffix[nets_arr[idx]]}"
+            draw.text((x + 2, y + 84 * SCALE + 1), label, fill=200, font=font)
+
+    grid.save(img_dir / "overview.png")
+    print(f"Images saved to {img_dir}/  ({len(inputs_arr)} individual + overview.png)")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--max-episodes", type=int, default=50)
@@ -242,6 +302,8 @@ def main():
         source_nets = nets_arr,
     )
     print(f"\nSaved to {STIMULI_PATH}")
+
+    save_images(inputs_arr, levels_arr, types_arr, nets_arr, OUTPUT_DIR)
 
 
 if __name__ == "__main__":
