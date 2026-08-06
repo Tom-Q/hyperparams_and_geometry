@@ -42,7 +42,7 @@ BO_STATE_PATH = OUTPUT_DIR / "bo_state.json"
 #   0  learning_rate  : [1e-4, 1e-3]  log scale
 #   1  entropy_coef   : [5e-3, 1e-1]  log scale
 #   2  gamma          : [0.98, 0.995] linear
-#   3  width_mult     : [0.5, 2.0]    log scale  -> hidden_size = round(512 * mult)
+#   3  hidden_size    : [256, 768]     log scale
 #   4  use_batch_norm : >= 0.5 -> True
 #   5  use_attention  : >= 0.5 -> True
 #   6  use_residual   : >= 0.5 -> True

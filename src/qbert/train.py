@@ -29,6 +29,7 @@ TRACKED_LEVELS       = tuple(range(2, 21))
 SUCCESS_LEVEL  = 5          # level that must be reached to declare success
 SUCCESS_FRAC   = 0.5        # fraction of eval episodes that must reach SUCCESS_LEVEL
 PATIENCE_STEPS = 10_000_000 # stop if eval_mean hasn't improved in this many env steps
+LEVEL2_DEADLINE = 5_000_000 # stop if level 2 never reached by this step
 
 PERF_THRESHOLDS = {
     0.025: "0p025",
@@ -60,8 +61,8 @@ class ResidualBlock(nn.Module):
         self.use_batch_norm = use_batch_norm
 
         if use_batch_norm:
-            self.bn1 = nn.BatchNorm2d(channels)
-            self.bn2 = nn.BatchNorm2d(channels)
+            self.bn1 = nn.GroupNorm(16, channels)
+            self.bn2 = nn.GroupNorm(16, channels)
 
     def forward(self, x):
         residual = x
@@ -400,6 +401,8 @@ class ImprovedA2CAgent:
             self.total_steps       = 0
             self.episodes          = 0
             self.best_mean_reward  = -float('inf')
+            self.best_mean_step    = 0              # env step at which best_mean_reward was achieved
+            self.max_level_ever    = 1              # highest level reached in any eval episode
             self.episode_rewards   = [0 for _ in range(num_envs)]
             self.reward_ema              = None  # EMA of raw episode rewards (alpha=0.01 per episode)
             self.perf_thresholds_crossed = set()  # normalised thresholds already saved as perf_X.npz
@@ -645,7 +648,7 @@ class ImprovedA2CAgent:
         if return_losses:
             return {'policy_loss': policy_loss_value, 'value_loss': value_loss_value, 'entropy': entropy_value}
 
-    def evaluate(self, num_episodes=10, deterministic=False, verbose=False):
+    def evaluate(self, num_episodes=20, deterministic=False, verbose=False):
         from gymnasium.wrappers import FrameStackObservation
         from gymnasium.wrappers.atari_preprocessing import AtariPreprocessing
 
@@ -706,6 +709,7 @@ class ImprovedA2CAgent:
 
         if mean_reward > self.best_mean_reward:
             self.best_mean_reward = mean_reward
+            self.best_mean_step   = self.total_steps
             torch.save(self.network.state_dict(), self.run_dir / "best_weights.pt")
             self._save_activations(self.run_dir / "best")
 
@@ -717,10 +721,14 @@ class ImprovedA2CAgent:
 
         ema = self.reward_ema if self.reward_ema is not None else float('nan')
         frac_success_level = len(steps_to_level[SUCCESS_LEVEL]) / num_episodes
+        level_fracs = {L: len(steps_to_level[L]) / num_episodes for L in TRACKED_LEVELS}
+        max_level_reached = max((L for L in TRACKED_LEVELS if level_fracs[L] > 0), default=1)
+        frac_max_level = level_fracs.get(max_level_reached, 0.0)
+        self.max_level_ever = max(self.max_level_ever, max_level_reached)
         level_vals = []
         for L in TRACKED_LEVELS:
             reached = steps_to_level[L]
-            frac = len(reached) / num_episodes
+            frac = level_fracs[L]
             mean_steps = float(np.mean(reached)) if reached else float('nan')
             std_steps  = float(np.std(reached))  if reached else float('nan')
             level_vals.extend([f"{frac:.3f}", f"{mean_steps:.1f}", f"{std_steps:.1f}"])
@@ -729,7 +737,7 @@ class ImprovedA2CAgent:
                     + ",".join(level_vals) + "\n")
 
         self.network.train()
-        return mean_reward, std_reward, frac_success_level
+        return mean_reward, std_reward, frac_success_level, max_level_reached, frac_max_level
 
     def train(self, total_timesteps, eval_freq=200_000, log_freq=10_000):
         rollout_size = self.n_steps * self.num_envs
@@ -758,11 +766,12 @@ class ImprovedA2CAgent:
 
             if self.total_steps % eval_freq < rollout_size:
                 prev_best = self.best_mean_reward
-                mean_reward, std_reward, frac_success = self.evaluate()
+                mean_reward, std_reward, frac_success, max_lvl, frac_max = self.evaluate()
                 print(f"  [eval] steps={self.total_steps:,}  "
                       f"score={mean_reward:.1f}±{std_reward:.1f}  "
                       f"best={self.best_mean_reward:.1f}  "
-                      f"frac_level{SUCCESS_LEVEL}={frac_success:.2f}", flush=True)
+                      f"frac_lvl{SUCCESS_LEVEL}={frac_success:.0%}  "
+                      f"max_lvl={max_lvl}({frac_max:.0%})", flush=True)
 
                 if self.best_mean_reward > prev_best:
                     steps_at_last_improvement = self.total_steps
@@ -771,6 +780,12 @@ class ImprovedA2CAgent:
                     print(f"  [early stop] SUCCESS: level {SUCCESS_LEVEL} reached in "
                           f"{frac_success:.0%} of episodes at step {self.total_steps:,}", flush=True)
                     stop_reason = "success"
+                    break
+
+                if self.total_steps >= LEVEL2_DEADLINE and max_lvl == 1:
+                    print(f"  [early stop] EARLY_FAILURE: level 2 never reached by "
+                          f"step {self.total_steps:,}", flush=True)
+                    stop_reason = "early_failure"
                     break
 
                 if (steps_at_last_improvement is not None and
@@ -785,7 +800,7 @@ class ImprovedA2CAgent:
                 self._save_activations(self.run_dir / f"step_{update_count:07d}", step=self.total_steps)
 
         # Final evaluation and checkpoint (always runs, even on early stop)
-        mean_reward, std_reward, _ = self.evaluate(num_episodes=30)
+        mean_reward, std_reward, *_ = self.evaluate(num_episodes=30)
         print(f"  [final eval] score={mean_reward:.1f}±{std_reward:.1f}  "
               f"stop_reason={stop_reason}", flush=True)
         self._save_activations(self.run_dir / "final")
@@ -832,7 +847,9 @@ def train_network(config, run_dir, stimuli_array, total_steps=60_000_000,
             **{k: (bool(v) if isinstance(v, (bool, np.bool_)) else v) for k, v in config.items()},
         },
         "best_metric":     round(best_score, 2),
+        "best_step":       agent.best_mean_step,
         "final_step":      agent.total_steps,
+        "max_level_ever":  agent.max_level_ever,
         "stop_reason":     stop_reason,
         "training_time_s": round(time.time() - t0, 1),
     }
