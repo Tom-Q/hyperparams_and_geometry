@@ -12,10 +12,10 @@ will be qualitative and descriptive rather than correlational — the main quest
 networks show similar representational geometry across HP settings, and how representations
 evolve during training.
 
-One network ("model network") is trained first for stimulus extraction and excluded from all
-analyses. The remaining 24 are the analysis set. An additional 2–4 configs will be re-run
-(repeat 1+) after training to estimate variability; exact configs chosen after inspecting which
-reached the success criterion.
+Three networks ("source networks") were trained first for stimulus extraction and are excluded
+from all analyses. The remaining 32 are the analysis set. An additional 2–4 configs will be
+re-run (repeat 1+) after training to estimate variability; exact configs chosen after inspecting
+which reached the success criterion.
 
 ---
 
@@ -121,11 +121,11 @@ for levels 1–4 but wraps back to 1 when level 5 is completed; addr 99 is monot
 
 ## Hyperparameter Space
 
-No Bayesian optimisation. 8D Sobol sampling, 24 draws.
+No Bayesian optimisation. 8D Sobol sampling, 32 draws.
 
 **Design:** all 8 hyperparameters sampled jointly in a single Sobol sequence (seed=42,
 scrambled). Continuous dimensions are log- or linearly mapped; boolean dimensions are
-thresholded at 0.5. This gives 24 diverse configurations covering the full HP space without
+thresholded at 0.5. This gives 32 diverse configurations covering the full HP space without
 fixing any dimension.
 
 | Dim | HP | Range | Scale | Boolean threshold |
@@ -148,8 +148,9 @@ All other parameters fixed: `value_coef=0.5`, `clip_ratio=0.2`, `clip_grad_norm=
 
 Run `python scripts/run_qbert_network.py --list` for the full config table.
 
-**Model network config** (not in analysis set):
+**Source network config** (3 runs used for stimulus extraction, not in analysis set):
 `lr=0.0003, entropy=0.01, gamma=0.99, hidden_size=512, depth=1, use_batch_norm=True, use_attention=True, use_residual=True`
+Runs: `run_model_test1`, `run_model_r0`, `run_model_r1`.
 
 **Repeat runs:** after primary training, 2–4 configs that reached the success criterion will
 be re-run (`--repeat 1`, `--repeat 2`) to estimate intra-config variability.
@@ -185,8 +186,8 @@ Only fires for thresholds the network actually reaches.
 ### npz contents
 
 Every checkpoint file contains:
-- `layer_0` — shape (44, hidden_size) float32; first FC activations over the 44 stimuli
-- `layer_1` — shape (44, hidden_size) float32; second FC activations (only when `depth=2`)
+- `layer_0` — shape (48, hidden_size) float32; first FC activations over the 48 stimuli
+- `layer_1` — shape (48, hidden_size) float32; second FC activations (only when `depth=2`)
 - `step` — int64; env step count at time of save
 - `avg_reward` — float32; EMA of raw episode reward at time of save; `nan` before first episode
 
@@ -194,20 +195,31 @@ Every checkpoint file contains:
 
 ## Stimuli
 
-**44 stimuli total** (44×44 RDM), extracted from the model network's gameplay only.
+**48 stimuli total** (48×48 RDM), extracted from 3 source networks across 4 levels.
 
-**Composition:**
-- 4 level-start frames (one per level, levels 1–4)
-- 10 in-level frames per level (levels 1–4) = 40 frames
+**Composition per level (×4 levels = 48 total):**
+- 1 level-start frame (assigned to one rotating source network per level)
+- 1 level-end frame (assigned to a different rotating source network per level)
+- 10 in-level intermediate frames (~3–4 per source network)
+
+**Per-level network assignments (`run_model_test1`, `run_model_r0`, `run_model_r1`):**
+
+| Level | Start | End | Intermediate counts |
+|-------|-------|-----|---------------------|
+| 1 | run_model_r1 | run_model_r0 | test1=3, r0=3, r1=4 |
+| 2 | run_model_r0 | run_model_test1 | test1=3, r0=4, r1=3 |
+| 3 | run_model_test1 | run_model_r1 | test1=4, r0=3, r1=3 |
+| 4 | run_model_r1 | run_model_test1 | test1=3, r0=4, r1=3 |
 
 Frames are preprocessed input tensors, shape (4, 84, 84) float32. Saved to
-`output/production/qbert/stimuli.npz` (keys: `inputs`, `levels`, `frame_types`).
+`output/production/qbert/stimuli.npz` (keys: `inputs`, `levels`, `frame_types`, `source_nets`).
 
 The Atari environment is not needed to compute RDMs for analysis networks — stimuli are
 passed directly through the FC layers in a single forward pass.
 
 **Scope:** levels 1–4 only, ensuring all functional analysis networks have encountered
-these game states during training.
+these game states during training. Source networks loaded with `strict=False` (old weights
+have BatchNorm2d running stats; new architecture uses GroupNorm, which discards them cleanly).
 
 ---
 
@@ -260,5 +272,5 @@ Same pipeline as CartPole and FourRooms. Priority analyses given n≈24:
 4. **Performance checkpoints** — does representational geometry differ between networks
    that reach high performance thresholds vs. those that plateau early?
 
-HP correlation analyses (Finding #2 style) are underpowered at n=24 — treated as
+HP correlation analyses (Finding #2 style) are underpowered at n=32 — treated as
 exploratory at best.

@@ -54,7 +54,7 @@ _GAMMA_LO,  _GAMMA_HI  = 0.98, 0.995
 _HIDDEN_LO, _HIDDEN_HI = 256,  768
 
 _engine = torch.quasirandom.SobolEngine(dimension=8, scramble=True, seed=42)
-_pts    = _engine.draw(24).numpy()
+_pts    = _engine.draw(32).numpy()
 
 def _logmap(lo, hi, u): return float(f"{np.exp(np.log(lo) + u * (np.log(hi) - np.log(lo))):.6g}")
 def _linmap(lo, hi, u): return float(f"{lo + u * (hi - lo):.4f}")
@@ -199,7 +199,7 @@ def main():
         # Model network: create a dummy stimuli placeholder so train_network works.
         # Actual stimuli are extracted from this network's gameplay afterwards.
         import numpy as np
-        stimuli = np.zeros((44, 4, 84, 84), dtype=np.float32)
+        stimuli = np.zeros((48, 4, 84, 84), dtype=np.float32)
         print("  stimuli : dummy placeholder (extract real stimuli after training)")
 
     from src.qbert.train import train_network
