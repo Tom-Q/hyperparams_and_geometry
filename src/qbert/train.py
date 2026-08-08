@@ -54,15 +54,19 @@ def _register_ale():
 
 
 class ResidualBlock(nn.Module):
-    def __init__(self, channels, use_batch_norm=False):
+    def __init__(self, channels, use_batch_norm=False, legacy_batch_norm=False):
         super(ResidualBlock, self).__init__()
         self.conv1 = nn.Conv2d(channels, channels, kernel_size=3, padding=1)
         self.conv2 = nn.Conv2d(channels, channels, kernel_size=3, padding=1)
         self.use_batch_norm = use_batch_norm
 
         if use_batch_norm:
-            self.bn1 = nn.GroupNorm(16, channels)
-            self.bn2 = nn.GroupNorm(16, channels)
+            if legacy_batch_norm:
+                self.bn1 = nn.BatchNorm2d(channels)
+                self.bn2 = nn.BatchNorm2d(channels)
+            else:
+                self.bn1 = nn.GroupNorm(16, channels)
+                self.bn2 = nn.GroupNorm(16, channels)
 
     def forward(self, x):
         residual = x
@@ -109,7 +113,8 @@ class SpatialAttentionModule(nn.Module):
 
 class ImprovedA2CNetwork(nn.Module):
     def __init__(self, input_shape, num_actions, use_attention=False, use_residual=False,
-                 use_aux=False, use_batch_norm=False, hidden_size=512, depth=1):
+                 use_aux=False, use_batch_norm=False, hidden_size=512, depth=1,
+                 legacy_batch_norm=False):
         super(ImprovedA2CNetwork, self).__init__()
 
         self.input_shape = input_shape
@@ -135,7 +140,8 @@ class ImprovedA2CNetwork(nn.Module):
             self.bn3 = nn.Identity()
 
         if self.use_residual:
-            self.residual = ResidualBlock(64, use_batch_norm=use_batch_norm)
+            self.residual = ResidualBlock(64, use_batch_norm=use_batch_norm,
+                                         legacy_batch_norm=legacy_batch_norm)
 
         if self.use_attention:
             self.attention = SpatialAttentionModule(channels=64, num_heads=4, grid_size=7)

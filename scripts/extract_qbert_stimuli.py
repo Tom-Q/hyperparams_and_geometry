@@ -1,29 +1,31 @@
-"""Extract Q*bert stimuli from the three source model networks.
+"""Extract Q*bert stimuli from four source networks.
 
-48 stimuli total: 4 levels × 12 frames per level.
-  - 1 start per level  (first frame when that level begins)
-  - 1 end per level    (last frame before level transitions out)
-  - 10 intermediate per level, split ~3-4 per source network
+53 stimuli total:
+  - 1 level-start frame per level, levels 1–5  (5 frames)
+  - 12 intermediate frames per level, levels 1–4 (3 per network × 4 networks = 48 frames)
 
-Starts and ends are each assigned to one network per level, rotating
-so different levels come from different networks. Intermediates are
-spread across all three networks.
+Every stimulus comes from a DIFFERENT episode that reached level 5.
+Frames from episodes that did not reach level 5 are never used.
 
-Level detection uses ALE RAM address 99 (cumulative levels-completed count).
+Source networks:
+  run_model_r1  — legacy BatchNorm2d in ResidualBlock (trained before GroupNorm fix)
+  run_0000_r0   — GroupNorm, no attention, no residual, depth=2
+  run_0003_r0   — GroupNorm, no attention, residual, depth=2
+  run_0004_r0   — GroupNorm, no attention, no residual, depth=1
 
 Usage:
     python scripts/extract_qbert_stimuli.py [--dry-run] [--max-episodes N]
 
 Output:
     output/production/qbert/stimuli.npz
-      inputs       : (48, 4, 84, 84) float32
-      levels       : (48,) int32
-      frame_types  : (48,) str     — 'start', 'end', 'intermediate'
-      source_nets  : (48,) str
+      inputs       : (53, 4, 84, 84) float32
+      levels       : (53,) int32
+      frame_types  : (53,) str  — 'start' or 'intermediate'
+      source_nets  : (53,) str
     output/production/qbert/stimuli_images/
-      overview.png                      — 4×12 grid (rows=levels, cols=stimuli per level)
-      00_lvl1_start_run_model_r1.png    — individual stimuli (most recent frame, channel 3)
-      ...
+      overview_starts.png       — 1×5 grid of level starts
+      overview_intermediate.png — 4×12 grid of intermediates (rows=levels, cols=frames)
+      individual PNGs
 """
 
 import argparse
@@ -43,43 +45,52 @@ from src.qbert.train import ImprovedA2CNetwork, QBERT_LEVEL_RAM_ADDR
 OUTPUT_DIR   = REPO_ROOT / "output" / "production" / "qbert"
 STIMULI_PATH = OUTPUT_DIR / "stimuli.npz"
 
-TARGET_LEVELS = (1, 2, 3, 4)
+INTERMEDIATE_LEVELS  = (1, 2, 3, 4)
+START_LEVELS         = (1, 2, 3, 4, 5)
+INTERMEDIATE_PER_NET = 3   # per level
 
-_NETS = ["run_model_test1", "run_model_r0", "run_model_r1"]
-
-# Per-level assignments: which network provides start, end, and how many
-# intermediate frames each network contributes (must sum to 10).
-LEVEL_ASSIGNMENTS = {
-    1: {"start": "run_model_r1",    "end": "run_model_r0",
-        "intermediate": {"run_model_test1": 3, "run_model_r0": 3, "run_model_r1": 4}},
-    2: {"start": "run_model_r0",    "end": "run_model_test1",
-        "intermediate": {"run_model_test1": 3, "run_model_r0": 4, "run_model_r1": 3}},
-    3: {"start": "run_model_test1", "end": "run_model_r1",
-        "intermediate": {"run_model_test1": 4, "run_model_r0": 3, "run_model_r1": 3}},
-    4: {"start": "run_model_r1",    "end": "run_model_test1",
-        "intermediate": {"run_model_test1": 3, "run_model_r0": 4, "run_model_r1": 3}},
-}
+_NETS = ["run_model_r1", "run_0000_r0", "run_0003_r0", "run_0004_r0"]
 
 SOURCE_NETWORKS = [
     {
-        "name":   "run_model_test1",
-        "weights": OUTPUT_DIR / "run_model_test1" / "best_weights.pt",
-        "config": dict(use_batch_norm=True, use_attention=True, use_residual=True,
-                       hidden_size=512, depth=1),
+        "name":              "run_model_r1",
+        "weights":           OUTPUT_DIR / "run_model_r1" / "best_weights.pt",
+        "config":            dict(use_batch_norm=True, use_attention=True, use_residual=True,
+                                  hidden_size=512, depth=1),
+        "legacy_batch_norm": True,
+        "n_episodes_needed": 14,  # start levels 1+5 + 4 levels × 3 intermediate
     },
     {
-        "name":   "run_model_r0",
-        "weights": OUTPUT_DIR / "run_model_r0" / "best_weights.pt",
-        "config": dict(use_batch_norm=True, use_attention=True, use_residual=True,
-                       hidden_size=512, depth=1),
+        "name":              "run_0000_r0",
+        "weights":           OUTPUT_DIR / "run_0000_r0" / "best_weights.pt",
+        "config":            dict(use_batch_norm=True, use_attention=False, use_residual=False,
+                                  hidden_size=406, depth=2),
+        "legacy_batch_norm": False,
+        "n_episodes_needed": 13,  # start level 2 + 4 levels × 3 intermediate
     },
     {
-        "name":   "run_model_r1",
-        "weights": OUTPUT_DIR / "run_model_r1" / "best_weights.pt",
-        "config": dict(use_batch_norm=True, use_attention=True, use_residual=True,
-                       hidden_size=512, depth=1),
+        "name":              "run_0003_r0",
+        "weights":           OUTPUT_DIR / "run_0003_r0" / "best_weights.pt",
+        "config":            dict(use_batch_norm=True, use_attention=False, use_residual=True,
+                                  hidden_size=742, depth=2),
+        "legacy_batch_norm": False,
+        "n_episodes_needed": 13,  # start level 3 + 4 levels × 3 intermediate
+    },
+    {
+        "name":              "run_0004_r0",
+        "weights":           OUTPUT_DIR / "run_0004_r0" / "best_weights.pt",
+        "config":            dict(use_batch_norm=True, use_attention=False, use_residual=False,
+                                  hidden_size=634, depth=1),
+        "legacy_batch_norm": False,
+        "n_episodes_needed": 13,  # start level 4 + 4 levels × 3 intermediate
     },
 ]
+
+# Which network provides the level-start frame for each level.
+START_ASSIGNMENTS = {1: "run_model_r1", 2: "run_0000_r0", 3: "run_0003_r0",
+                     4: "run_0004_r0",  5: "run_model_r1"}
+
+ALL_LEVELS = set(START_LEVELS) | set(INTERMEDIATE_LEVELS)  # 1–5
 
 
 def make_env():
@@ -95,33 +106,33 @@ def make_env():
     return FrameStackObservation(env, 4)
 
 
-def load_network(env, config, weights_path):
-    net = ImprovedA2CNetwork(env.observation_space.shape, env.action_space.n, **config)
-    sd = torch.load(weights_path, map_location="cpu")
-    result = net.load_state_dict(sd, strict=False)
-    if result.missing_keys:
-        raise RuntimeError(f"Missing keys: {result.missing_keys}")
+def load_network(env, config, weights_path, legacy_batch_norm=False):
+    net = ImprovedA2CNetwork(env.observation_space.shape, env.action_space.n,
+                             legacy_batch_norm=legacy_batch_norm, **config)
+    net.load_state_dict(torch.load(weights_path, map_location="cpu"), strict=True)
     net.eval()
     return net
 
 
-def collect_level_pools(net, env, ale, max_episodes):
-    """Run episodes and collect per-level frame sequences.
+def collect_successful_episodes(net, env, ale, n_needed, max_episodes):
+    """Run episodes, keeping only those that reach level 5.
 
-    Returns: dict level -> list of frame-lists (one per episode that reached it).
-    Each frame is a (4, 84, 84) float32 array.
+    Returns a list of dicts {level: [frames]} for each successful episode,
+    in the order collected. Stops once n_needed successful episodes are found
+    or max_episodes total episodes have been run.
     """
-    level_eps = {L: [] for L in TARGET_LEVELS}
+    successful = []
+    total_eps  = 0
 
-    for ep in range(max_episodes):
+    while len(successful) < n_needed and total_eps < max_episodes:
         obs, _ = env.reset()
         done = False
-        ep_frames = {L: [] for L in TARGET_LEVELS}
+        ep_frames = {L: [] for L in ALL_LEVELS}
 
         while not done:
             obs_array = np.array(obs, dtype=np.float32)
             level = int(ale.getRAM()[QBERT_LEVEL_RAM_ADDR]) + 1
-            if level in TARGET_LEVELS:
+            if level in ALL_LEVELS:
                 ep_frames[level].append(obs_array)
             with torch.no_grad():
                 t = torch.tensor(obs_array).unsqueeze(0)
@@ -130,90 +141,101 @@ def collect_level_pools(net, env, ale, max_episodes):
             obs, _, terminated, truncated, _ = env.step(action)
             done = terminated or truncated
 
-        levels_reached = [L for L in TARGET_LEVELS if len(ep_frames[L]) >= 3]
-        for L in levels_reached:
-            level_eps[L].append(ep_frames[L])
+        total_eps += 1
+        reached_5 = len(ep_frames[5]) >= 1
+        if reached_5:
+            successful.append(ep_frames)
 
-        print(f"    ep {ep+1:2d}: reached {levels_reached}  "
-              f"pool sizes {[len(level_eps[L]) for L in TARGET_LEVELS]}", flush=True)
+        print(f"    ep {total_eps:3d}: {'SUCCESS' if reached_5 else 'fail   '}  "
+              f"collected {len(successful)}/{n_needed}", flush=True)
 
-        if all(level_eps[L] for L in TARGET_LEVELS):
-            break
+    if len(successful) < n_needed:
+        print(f"  WARNING: only {len(successful)}/{n_needed} successful episodes "
+              f"after {total_eps} attempts")
 
-    return level_eps
-
-
-def pick_episode(level_eps):
-    """Return the longest episode frame-list for a given level pool."""
-    return max(level_eps, key=len)
+    return successful
 
 
-def sample_intermediates(frames, n):
-    """Sample n evenly-spaced frames from the interior (excluding first and last)."""
+def pick_random_interior_frame(frames, rng):
+    """Pick a uniformly random frame from the interior (excluding first and last).
+
+    Returns (frame, progress) where progress is the fraction through the level [0, 1].
+    """
     interior = frames[1:-1]
-    assert len(interior) >= n, f"Not enough interior frames ({len(interior)}) for {n} samples"
-    indices = np.linspace(0, len(interior) - 1, n, dtype=int)
-    return [interior[i] for i in indices]
+    assert len(interior) >= 1, "Level segment too short for interior frame"
+    idx = int(rng.integers(len(interior)))
+    progress = idx / (len(interior) - 1) if len(interior) > 1 else 0.5
+    return interior[idx], progress
+
+
+_NET_SUFFIX = {
+    "run_model_r1": "r1",
+    "run_0000_r0":  "0000",
+    "run_0003_r0":  "0003",
+    "run_0004_r0":  "0004",
+}
 
 
 def save_images(inputs_arr, levels_arr, types_arr, nets_arr, out_dir):
-    """Save individual PNGs and a 4×12 overview grid."""
     img_dir = out_dir / "stimuli_images"
     img_dir.mkdir(exist_ok=True)
 
-    SCALE   = 3          # upscale 84→252 px for legibility
-    LABEL_H = 14         # pixels for text label below each cell
+    SCALE   = 3
+    LABEL_H = 14
     CELL_W  = 84 * SCALE
     CELL_H  = 84 * SCALE + LABEL_H
-    COLS    = 12         # stimuli per level
-    ROWS    = 4          # levels
 
-    # Short label: type initial + net suffix
-    _net_suffix = {"run_model_test1": "t1", "run_model_r0": "r0", "run_model_r1": "r1"}
-    _type_label = {"start": "S", "end": "E", "intermediate": "I"}
+    _type_label = {"start": "S", "intermediate": "I"}
 
-    def frame_to_img(arr):
-        frame = arr[3]  # most recent channel
-        px = (frame * 255).clip(0, 255).astype(np.uint8)
-        return Image.fromarray(px, mode="L").resize(
-            (CELL_W, 84 * SCALE), resample=Image.NEAREST
-        )
-
-    # Individual images
-    for i, (inp, lvl, ft, net) in enumerate(zip(inputs_arr, levels_arr, types_arr, nets_arr)):
-        name = f"{i:02d}_lvl{lvl}_{ft}_{net}.png"
-        frame_to_img(inp).save(img_dir / name)
-
-    # Overview grid: rows = levels (1-4), within each row order is start, end, inter×10
     try:
         font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", 10)
     except Exception:
         font = ImageFont.load_default()
 
-    grid = Image.new("L", (COLS * CELL_W, ROWS * CELL_H), color=40)
-    draw = ImageDraw.Draw(grid)
+    def frame_to_img(arr):
+        px = (arr[3] * 255).clip(0, 255).astype(np.uint8)
+        return Image.fromarray(px, mode="L").resize((CELL_W, 84 * SCALE), resample=Image.NEAREST)
 
-    # Group by level, preserving order within each level
-    level_indices = {L: [] for L in range(1, 5)}
-    for i, lvl in enumerate(levels_arr):
-        level_indices[int(lvl)].append(i)
+    def label_for(idx):
+        return f"{_type_label[types_arr[idx]]}{_NET_SUFFIX[nets_arr[idx]]}"
 
-    for row, lvl in enumerate(range(1, 5)):
-        idxs = level_indices[lvl]
-        assert len(idxs) == COLS, f"Expected {COLS} stimuli for level {lvl}, got {len(idxs)}"
-        for col, idx in enumerate(idxs):
+    for i, (inp, lvl, ft, net) in enumerate(zip(inputs_arr, levels_arr, types_arr, nets_arr)):
+        frame_to_img(inp).save(img_dir / f"{i:02d}_lvl{lvl}_{ft}_{net}.png")
+
+    # Starts: 1 row × 5 cols
+    start_idxs = sorted([i for i, t in enumerate(types_arr) if t == "start"],
+                        key=lambda i: levels_arr[i])
+    grid_s = Image.new("L", (len(start_idxs) * CELL_W, CELL_H), color=40)
+    draw_s = ImageDraw.Draw(grid_s)
+    for col, idx in enumerate(start_idxs):
+        x = col * CELL_W
+        grid_s.paste(frame_to_img(inputs_arr[idx]), (x, 0))
+        draw_s.text((x + 2, 84 * SCALE + 1),
+                    f"L{levels_arr[idx]} {label_for(idx)}", fill=200, font=font)
+    grid_s.save(img_dir / "overview_starts.png")
+
+    # Intermediates: 4 rows × 12 cols, sorted chronologically within each level
+    inter_by_level = {L: [] for L in INTERMEDIATE_LEVELS}
+    for i, (t, lvl) in enumerate(zip(types_arr, levels_arr)):
+        if t == "intermediate":
+            inter_by_level[int(lvl)].append(i)  # already sorted by progress
+
+    cols = len(_NETS) * INTERMEDIATE_PER_NET
+    grid_i = Image.new("L", (cols * CELL_W, len(INTERMEDIATE_LEVELS) * CELL_H), color=40)
+    draw_i = ImageDraw.Draw(grid_i)
+    for row, lvl in enumerate(INTERMEDIATE_LEVELS):
+        for col, idx in enumerate(inter_by_level[lvl]):
             x, y = col * CELL_W, row * CELL_H
-            grid.paste(frame_to_img(inputs_arr[idx]), (x, y))
-            label = f"{_type_label[types_arr[idx]]}{_net_suffix[nets_arr[idx]]}"
-            draw.text((x + 2, y + 84 * SCALE + 1), label, fill=200, font=font)
+            grid_i.paste(frame_to_img(inputs_arr[idx]), (x, y))
+            draw_i.text((x + 2, y + 84 * SCALE + 1), label_for(idx), fill=200, font=font)
+    grid_i.save(img_dir / "overview_intermediate.png")
 
-    grid.save(img_dir / "overview.png")
-    print(f"Images saved to {img_dir}/  ({len(inputs_arr)} individual + overview.png)")
+    print(f"Images saved to {img_dir}/")
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--max-episodes", type=int, default=50)
+    parser.add_argument("--max-episodes", type=int, default=200)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
@@ -223,71 +245,70 @@ def main():
         print(f"ERROR: {STIMULI_PATH} already exists. Delete it first to regenerate.")
         sys.exit(1)
 
-    # Collect per-network, per-level frame pools
-    pools = {}
+    # Collect successful episodes per network
+    successful_eps = {}
     for source in SOURCE_NETWORKS:
         name = source["name"]
-        print(f"\n[{name}] Running up to {args.max_episodes} episodes...")
+        n    = source["n_episodes_needed"]
+        print(f"\n[{name}] Collecting {n} successful episodes (max {args.max_episodes} attempts)...")
         env = make_env()
         ale = env.unwrapped.ale
-        net = load_network(env, source["config"], source["weights"])
-        pools[name] = collect_level_pools(net, env, ale, args.max_episodes)
+        net = load_network(env, source["config"], source["weights"],
+                           source["legacy_batch_norm"])
+        successful_eps[name] = collect_successful_episodes(net, env, ale, n, args.max_episodes)
         env.close()
-        for L in TARGET_LEVELS:
-            n = len(pools[name][L])
-            print(f"  level {L}: {n} episode(s)" if n else f"  level {L}: NOT REACHED")
+        print(f"  → {len(successful_eps[name])} episodes collected")
 
     if args.dry_run:
         print("\nDry run complete.")
         return
 
-    # Assemble stimuli according to LEVEL_ASSIGNMENTS
-    all_inputs, all_levels, all_types, all_nets = [], [], [], []
+    all_inputs, all_levels, all_types, all_nets, all_progress = [], [], [], [], []
 
-    for L in TARGET_LEVELS:
-        assign = LEVEL_ASSIGNMENTS[L]
-        print(f"\nLevel {L}:")
+    ep_idx = {name: 0 for name in _NETS}
+    rng = np.random.default_rng(seed=42)
 
-        # Start frame
-        start_net = assign["start"]
-        if not pools[start_net][L]:
-            # Fall back to any network that has data
-            start_net = next(n for n in _NETS if pools[n][L])
-            print(f"  WARNING: start fallback to {start_net}")
-        frames = pick_episode(pools[start_net][L])
+    print("\nLevel starts:")
+    for L in START_LEVELS:
+        net_name = START_ASSIGNMENTS[L]
+        eps = successful_eps[net_name]
+        assert ep_idx[net_name] < len(eps), \
+            f"Ran out of successful episodes for {net_name} (level {L} start)"
+        frames = eps[ep_idx[net_name]][L]
+        assert len(frames) >= 1, f"No frames at level {L} in episode for {net_name}"
         all_inputs.append(frames[0])
-        all_levels.append(L); all_types.append("start"); all_nets.append(start_net)
-        print(f"  start  : {start_net}")
+        all_levels.append(L); all_types.append("start"); all_nets.append(net_name)
+        all_progress.append(0.0)
+        ep_idx[net_name] += 1
+        print(f"  level {L}: {net_name}  (ep #{ep_idx[net_name]})")
 
-        # End frame
-        end_net = assign["end"]
-        if not pools[end_net][L]:
-            end_net = next(n for n in _NETS if pools[n][L])
-            print(f"  WARNING: end fallback to {end_net}")
-        frames = pick_episode(pools[end_net][L])
-        all_inputs.append(frames[-1])
-        all_levels.append(L); all_types.append("end"); all_nets.append(end_net)
-        print(f"  end    : {end_net}")
+    print("\nIntermediates:")
+    for L in INTERMEDIATE_LEVELS:
+        print(f"  level {L}:")
+        for net_name in _NETS:
+            eps = successful_eps[net_name]
+            for _ in range(INTERMEDIATE_PER_NET):
+                assert ep_idx[net_name] < len(eps), \
+                    f"Ran out of successful episodes for {net_name} (level {L} intermediate)"
+                frames = eps[ep_idx[net_name]][L]
+                assert len(frames) >= 3, \
+                    f"Too few frames at level {L} in episode for {net_name}"
+                frame, progress = pick_random_interior_frame(frames, rng)
+                all_inputs.append(frame)
+                all_levels.append(L); all_types.append("intermediate"); all_nets.append(net_name)
+                all_progress.append(progress)
+                ep_idx[net_name] += 1
+            print(f"    {net_name} × {INTERMEDIATE_PER_NET}  (eps #{ep_idx[net_name]-INTERMEDIATE_PER_NET+1}–{ep_idx[net_name]})")
 
-        # Intermediate frames
-        for net_name, n_inter in assign["intermediate"].items():
-            if n_inter == 0:
-                continue
-            src = net_name
-            if not pools[src][L]:
-                src = next(n for n in _NETS if pools[n][L])
-                print(f"  WARNING: intermediate fallback {net_name} -> {src}")
-            frames = pick_episode(pools[src][L])
-            samples = sample_intermediates(frames, n_inter)
-            for s in samples:
-                all_inputs.append(s)
-                all_levels.append(L); all_types.append("intermediate"); all_nets.append(src)
-            print(f"  inter  : {src} × {n_inter}")
+    # Sort by (level, progress) for chronological order in RDMs
+    sort_key = np.array(all_levels) + np.array(all_progress)
+    order = np.argsort(sort_key, kind="stable")
 
-    inputs_arr = np.stack(all_inputs, axis=0).astype(np.float32)
-    levels_arr = np.array(all_levels, dtype=np.int32)
-    types_arr  = np.array(all_types)
-    nets_arr   = np.array(all_nets)
+    inputs_arr   = np.stack(all_inputs,    axis=0)[order].astype(np.float32)
+    levels_arr   = np.array(all_levels,    dtype=np.int32)[order]
+    types_arr    = np.array(all_types)[order]
+    nets_arr     = np.array(all_nets)[order]
+    progress_arr = np.array(all_progress,  dtype=np.float32)[order]
 
     print(f"\nTotal: {len(inputs_arr)} stimuli, shape {inputs_arr.shape}")
     print(f"  Levels:  {dict(zip(*np.unique(levels_arr, return_counts=True)))}")
@@ -300,6 +321,7 @@ def main():
         levels      = levels_arr,
         frame_types = types_arr,
         source_nets = nets_arr,
+        progress    = progress_arr,
     )
     print(f"\nSaved to {STIMULI_PATH}")
 

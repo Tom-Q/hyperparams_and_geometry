@@ -34,7 +34,7 @@ BO_STATE_PATH = OUTPUT_DIR / "bo_state.json"
 
 # ─── Hyperparameter grid ──────────────────────────────────────────────────────
 #
-# 24 analysis networks: 8D Sobol, 24 draws.
+# 32 analysis networks: 7D Sobol, 32 draws. use_batch_norm fixed to True.
 # All hyperparameters sampled jointly. Continuous dims mapped via log/linear
 # scale; boolean dims thresholded at 0.5.
 #
@@ -43,17 +43,16 @@ BO_STATE_PATH = OUTPUT_DIR / "bo_state.json"
 #   1  entropy_coef   : [5e-3, 1e-1]  log scale
 #   2  gamma          : [0.98, 0.995] linear
 #   3  hidden_size    : [256, 768]     log scale
-#   4  use_batch_norm : >= 0.5 -> True
-#   5  use_attention  : >= 0.5 -> True
-#   6  use_residual   : >= 0.5 -> True
-#   7  depth          : >= 0.5 -> 2, else 1
+#   4  use_attention  : >= 0.5 -> True
+#   5  use_residual   : >= 0.5 -> True
+#   6  depth          : >= 0.5 -> 2, else 1
 
 _LR_LO,     _LR_HI     = 1e-4, 1e-3
 _ENT_LO,    _ENT_HI    = 5e-3, 1e-1
 _GAMMA_LO,  _GAMMA_HI  = 0.98, 0.995
 _HIDDEN_LO, _HIDDEN_HI = 256,  768
 
-_engine = torch.quasirandom.SobolEngine(dimension=8, scramble=True, seed=42)
+_engine = torch.quasirandom.SobolEngine(dimension=7, scramble=True, seed=42)
 _pts    = _engine.draw(32).numpy()
 
 def _logmap(lo, hi, u): return float(f"{np.exp(np.log(lo) + u * (np.log(hi) - np.log(lo))):.6g}")
@@ -65,10 +64,10 @@ def _make_config(u):
         "entropy_coef":   _logmap(_ENT_LO,    _ENT_HI,    u[1]),
         "gamma":          _linmap(_GAMMA_LO,  _GAMMA_HI,  u[2]),
         "hidden_size":    int(round(_logmap(_HIDDEN_LO, _HIDDEN_HI, u[3]))),
-        "use_batch_norm": bool(u[4] >= 0.5),
-        "use_attention":  bool(u[5] >= 0.5),
-        "use_residual":   bool(u[6] >= 0.5),
-        "depth":          2 if u[7] >= 0.5 else 1,
+        "use_batch_norm": True,
+        "use_attention":  bool(u[4] >= 0.5),
+        "use_residual":   bool(u[5] >= 0.5),
+        "depth":          2 if u[6] >= 0.5 else 1,
     }
 
 ANALYSIS_CONFIGS = [_make_config(u) for u in _pts]
@@ -199,7 +198,7 @@ def main():
         # Model network: create a dummy stimuli placeholder so train_network works.
         # Actual stimuli are extracted from this network's gameplay afterwards.
         import numpy as np
-        stimuli = np.zeros((48, 4, 84, 84), dtype=np.float32)
+        stimuli = np.zeros((53, 4, 84, 84), dtype=np.float32)
         print("  stimuli : dummy placeholder (extract real stimuli after training)")
 
     from src.qbert.train import train_network
