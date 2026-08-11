@@ -20,6 +20,8 @@ $PY scripts/extract_llm_activations.py --model-id meta-llama/Llama-3.2-1B
 $PY scripts/extract_llm_activations.py --model-id Qwen/Qwen2.5-1.5B             --device cpu
 $PY scripts/extract_llm_activations.py --model-id HuggingFaceTB/SmolLM2-1.7B    --device cpu
 $PY scripts/extract_llm_activations.py --model-id google/gemma-2-2b              --device cpu
+$PY scripts/extract_llm_activations.py --model-id openai-community/gpt2-xl       --device cpu
+$PY scripts/extract_llm_activations.py --model-id microsoft/phi-2                --device cpu
 
 # ── Pythia training dynamics (15 checkpoints × 6 sizes) ───────────────────────
 # step143000 is already covered above.
