@@ -1,35 +1,32 @@
-"""Extract last-token hidden-state activations from a Pythia (or other HF) model.
+"""Extract hidden-state activations from a Pythia (or other HF) model.
 
-For each of 128 stimuli, runs a forward pass and saves the last-token representation
-at selected layers. Processes one stimulus at a time (no batching) to minimise memory.
+For each of 128 stimuli, runs a forward pass and saves activations at every
+layer (embedding + all transformer blocks). Processes one stimulus at a time
+(no batching) to minimise memory.
 
-Model weights are downloaded into a temporary directory and deleted after extraction,
-so only one checkpoint is on disk at a time (~140 MB for pythia-70m, ~5.6 GB for pythia-2.8b).
+Model weights are downloaded into a temporary directory and deleted after
+extraction, so only one checkpoint is on disk at a time.
 
 Output npz keys per model:
-  last_{label}   (n_stimuli, d_model) float32  — last-token representation
-  mean_{label}   (n_stimuli, d_model) float32  — mean-pool over all tokens
-  token_counts   (n_stimuli,)         int32    — tokens per stimulus (this tokenizer)
-  nll            (n_stimuli,)         float32  — mean per-token NLL
-  layer_labels, layer_indices, n_layers, d_model — metadata
+  last_emb, last_L1 … last_L{n}   (128, d_model) float32  — last-token
+  mean_emb, mean_L1 … mean_L{n}   (128, d_model) float32  — mean-pool
+  token_counts                     (128,)          int32   — tokens per stimulus
+  nll                              (128,)          float32 — mean per-token NLL
+  layer_labels, n_layers, d_model  — metadata
 
-Usage — Pythia training dynamics (Lout only, one checkpoint):
+Usage — Pythia checkpoint:
     python scripts/extract_llm_activations.py \\
         --model-id EleutherAI/pythia-70m \\
-        --revision step143000 \\
-        --layers lout
+        --revision step143000
 
-Usage — final-checkpoint cross-model analysis (emb + L50 + L75 + Lout):
+Usage — cross-family model:
     python scripts/extract_llm_activations.py \\
-        --model-id EleutherAI/pythia-70m \\
-        --revision step143000 \\
-        --layers all
+        --model-id meta-llama/Llama-3.2-1B
 
-Usage — force CPU (required for pythia-2.8b):
+Usage — force CPU (required for pythia-2.8b and large cross-family models):
     python scripts/extract_llm_activations.py \\
         --model-id EleutherAI/pythia-2.8b \\
         --revision step143000 \\
-        --layers lout \\
         --device cpu
 """
 
@@ -55,30 +52,13 @@ def model_slug(model_id: str, revision: str) -> str:
     return model_id.replace("/", "__") + f"__{revision}"
 
 
-def select_layer_indices(n_layers: int, mode: str) -> dict[str, int]:
-    """
-    Map layer labels to hidden_states tuple indices.
-    hidden_states[0] = embedding output
-    hidden_states[1..n_layers] = transformer block outputs
-    """
-    if mode == "lout":
-        return {"Lout": n_layers}
-    else:  # "all"
-        return {
-            "emb": 0,
-            "L50": round(0.5 * n_layers),
-            "L75": round(0.75 * n_layers),
-            "Lout": n_layers,
-        }
-
-
 def load_stimuli(path: Path) -> list[str]:
     with open(path) as f:
         data = json.load(f)
     return [s["text"] for s in data["stimuli"]]
 
 
-def extract(model_id: str, revision: str, device: str, layers_mode: str, dry_run: bool):
+def extract(model_id: str, revision: str, device: str, dry_run: bool):
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
     slug = model_slug(model_id, revision)
@@ -90,7 +70,7 @@ def extract(model_id: str, revision: str, device: str, layers_mode: str, dry_run
     stimuli = load_stimuli(STIMULI_PATH)
     print(f"Stimuli: {len(stimuli)}")
     print(f"Model:   {model_id}  revision={revision}")
-    print(f"Device:  {device}  layers={layers_mode}")
+    print(f"Device:  {device}")
 
     if dry_run:
         print("[dry-run] exiting")
@@ -117,19 +97,18 @@ def extract(model_id: str, revision: str, device: str, layers_mode: str, dry_run
         model.eval()
 
         n_layers = model.config.num_hidden_layers
-        layer_map = select_layer_indices(n_layers, layers_mode)
-        print(f"Layers ({n_layers} transformer blocks): {layer_map}")
+        d_model  = model.config.hidden_size
+
+        # hidden_states[0] = embedding, hidden_states[1..n_layers] = transformer blocks
+        layer_labels = ["emb"] + [f"L{i}" for i in range(1, n_layers + 1)]
+        print(f"Layers: {n_layers} transformer blocks + embedding = {len(layer_labels)} total")
         print(f"Download+load: {time.time()-t0:.1f}s")
 
-        d_model = model.config.hidden_size
         n_stimuli = len(stimuli)
-
-        last_acts = {label: np.zeros((n_stimuli, d_model), dtype=np.float32)
-                     for label in layer_map}
-        mean_acts = {label: np.zeros((n_stimuli, d_model), dtype=np.float32)
-                     for label in layer_map}
+        last_acts = {lbl: np.zeros((n_stimuli, d_model), dtype=np.float32) for lbl in layer_labels}
+        mean_acts = {lbl: np.zeros((n_stimuli, d_model), dtype=np.float32) for lbl in layer_labels}
         token_counts = np.zeros(n_stimuli, dtype=np.int32)
-        nll = np.zeros(n_stimuli, dtype=np.float32)
+        nll          = np.zeros(n_stimuli, dtype=np.float32)
 
         t1 = time.time()
         for i, text in enumerate(stimuli):
@@ -142,15 +121,14 @@ def extract(model_id: str, revision: str, device: str, layers_mode: str, dry_run
             token_counts[i] = inputs["input_ids"].shape[1]
             nll[i] = outputs.loss.item()
 
-            # hidden_states: tuple of (1, seq_len, d_model), one per layer+emb
-            for label, idx in layer_map.items():
-                hs = outputs.hidden_states[idx][0]  # (seq_len, d_model)
-                last_acts[label][i] = hs[-1, :].float().cpu().numpy()
-                mean_acts[label][i] = hs.mean(0).float().cpu().numpy()
+            # hidden_states: tuple of (1, seq_len, d_model) tensors
+            for j, lbl in enumerate(layer_labels):
+                hs = outputs.hidden_states[j][0]  # (seq_len, d_model)
+                last_acts[lbl][i] = hs[-1, :].float().cpu().numpy()
+                mean_acts[lbl][i] = hs.mean(0).float().cpu().numpy()
 
             if (i + 1) % 32 == 0 or i == n_stimuli - 1:
-                elapsed = time.time() - t1
-                print(f"  {i+1}/{n_stimuli}  ({elapsed:.1f}s)", flush=True)
+                print(f"  {i+1}/{n_stimuli}  ({time.time()-t1:.1f}s)", flush=True)
 
         del model
         if device == "cuda":
@@ -159,19 +137,15 @@ def extract(model_id: str, revision: str, device: str, layers_mode: str, dry_run
 
     # tmp dir (and downloaded weights) are now deleted
 
-    layer_labels = list(layer_map.keys())
-    layer_indices = np.array(list(layer_map.values()), dtype=np.int32)
-
     np.savez_compressed(
         str(out_path),
-        **{f"last_{label}": last_acts[label] for label in layer_labels},
-        **{f"mean_{label}": mean_acts[label] for label in layer_labels},
-        token_counts  = token_counts,
-        nll           = nll,
-        layer_labels  = np.array(layer_labels),
-        layer_indices = layer_indices,
-        n_layers      = np.int32(n_layers),
-        d_model       = np.int32(d_model),
+        **{f"last_{lbl}": last_acts[lbl] for lbl in layer_labels},
+        **{f"mean_{lbl}": mean_acts[lbl] for lbl in layer_labels},
+        token_counts = token_counts,
+        nll          = nll,
+        layer_labels = np.array(layer_labels),
+        n_layers     = np.int32(n_layers),
+        d_model      = np.int32(d_model),
     )
     size_mb = out_path.stat().st_size / 1e6
     print(f"Saved {out_path.name}  ({size_mb:.1f} MB)")
@@ -179,16 +153,14 @@ def extract(model_id: str, revision: str, device: str, layers_mode: str, dry_run
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model-id",  required=True)
-    parser.add_argument("--revision",  default="main",
+    parser.add_argument("--model-id", required=True)
+    parser.add_argument("--revision", default="main",
                         help="HF revision: 'main' or e.g. 'step143000' for Pythia checkpoints")
-    parser.add_argument("--layers",    choices=["lout", "all"], default="lout",
-                        help="lout: final block only (training dynamics); all: emb+L50+L75+Lout (cross-model)")
-    parser.add_argument("--device",    default="cuda" if torch.cuda.is_available() else "cpu")
-    parser.add_argument("--dry-run",   action="store_true")
+    parser.add_argument("--device",   default="cuda" if torch.cuda.is_available() else "cpu")
+    parser.add_argument("--dry-run",  action="store_true")
     args = parser.parse_args()
 
-    extract(args.model_id, args.revision, args.device, args.layers, args.dry_run)
+    extract(args.model_id, args.revision, args.device, args.dry_run)
 
 
 if __name__ == "__main__":
