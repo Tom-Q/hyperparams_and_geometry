@@ -21,7 +21,7 @@ The study has two components with different questions:
 
 ## Stimuli
 
-**File:** `data/stimuli_v1.1.json` — 128 stimuli, read-only. Do not modify.
+**File:** `docs/stimuli_v2.0.json` — 128 stimuli, read-only. Do not modify.
 
 **Design:** 8 themes × 4 tasks × 4 items = 128 stimuli, hierarchically ordered. Row order in the
 JSON defines canonical RDM order.
@@ -32,10 +32,10 @@ JSON defines canonical RDM order.
 | `reading_comprehension` | fables, proverbs, protagonist, pronoun_reference |
 | `translation` | french_to_german, spanish_to_italian, portuguese_to_dutch, danish_to_polish |
 | `conflict_advice` | romantic_partner, neighbour, workplace, family |
-| `haiku` | nature, city_life, emotions, mundane_objects |
+| `poetry` | haiku, limerick, sonnet, free_verse |
 | `health_advice` | nutrition, workout, sleep, stress |
-| `political_argument` | left_wing, right_wing, democracy_human_rights, environment |
-| `roleplay` | lotr, war_and_peace, mean_girls, star_wars |
+| `political_argument` | immigration, taxation, criminal_justice, environment |
+| `roleplay` | war_and_peace, pride_and_prejudice, star_wars, thousand_and_one_nights |
 
 The 128 stimuli function as a single task (analogous to a single task in the main study). Each
 model is one data point.

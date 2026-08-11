@@ -6,6 +6,13 @@ at selected layers. Processes one stimulus at a time (no batching) to minimise m
 Model weights are downloaded into a temporary directory and deleted after extraction,
 so only one checkpoint is on disk at a time (~140 MB for pythia-70m, ~5.6 GB for pythia-2.8b).
 
+Output npz keys per model:
+  last_{label}   (n_stimuli, d_model) float32  — last-token representation
+  mean_{label}   (n_stimuli, d_model) float32  — mean-pool over all tokens
+  token_counts   (n_stimuli,)         int32    — tokens per stimulus (this tokenizer)
+  nll            (n_stimuli,)         float32  — mean per-token NLL
+  layer_labels, layer_indices, n_layers, d_model — metadata
+
 Usage — Pythia training dynamics (Lout only, one checkpoint):
     python scripts/extract_llm_activations.py \\
         --model-id EleutherAI/pythia-70m \\
@@ -39,7 +46,7 @@ import torch
 REPO_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-STIMULI_PATH = REPO_ROOT / "data" / "stimuli_v1.1.json"
+STIMULI_PATH = REPO_ROOT / "docs" / "stimuli_v2.0.json"
 OUTPUT_DIR   = REPO_ROOT / "output" / "production" / "llm" / "activations"
 
 
@@ -117,22 +124,29 @@ def extract(model_id: str, revision: str, device: str, layers_mode: str, dry_run
         d_model = model.config.hidden_size
         n_stimuli = len(stimuli)
 
-        # activations[layer_label][stimulus_idx] = (d_model,) float32
-        all_acts = {label: np.zeros((n_stimuli, d_model), dtype=np.float32)
-                    for label in layer_map}
+        last_acts = {label: np.zeros((n_stimuli, d_model), dtype=np.float32)
+                     for label in layer_map}
+        mean_acts = {label: np.zeros((n_stimuli, d_model), dtype=np.float32)
+                     for label in layer_map}
+        token_counts = np.zeros(n_stimuli, dtype=np.int32)
+        nll = np.zeros(n_stimuli, dtype=np.float32)
 
         t1 = time.time()
         for i, text in enumerate(stimuli):
             inputs = tokenizer(text, return_tensors="pt", truncation=True,
                                max_length=512).to(device)
             with torch.no_grad():
-                outputs = model(**inputs, output_hidden_states=True)
+                outputs = model(**inputs, output_hidden_states=True,
+                                labels=inputs["input_ids"])
+
+            token_counts[i] = inputs["input_ids"].shape[1]
+            nll[i] = outputs.loss.item()
 
             # hidden_states: tuple of (1, seq_len, d_model), one per layer+emb
             for label, idx in layer_map.items():
-                # last token, all hidden units; cast to float32 for storage
-                vec = outputs.hidden_states[idx][0, -1, :].float().cpu().numpy()
-                all_acts[label][i] = vec
+                hs = outputs.hidden_states[idx][0]  # (seq_len, d_model)
+                last_acts[label][i] = hs[-1, :].float().cpu().numpy()
+                mean_acts[label][i] = hs.mean(0).float().cpu().numpy()
 
             if (i + 1) % 32 == 0 or i == n_stimuli - 1:
                 elapsed = time.time() - t1
@@ -150,7 +164,10 @@ def extract(model_id: str, revision: str, device: str, layers_mode: str, dry_run
 
     np.savez_compressed(
         str(out_path),
-        **{f"hidden_{label}": all_acts[label] for label in layer_labels},
+        **{f"last_{label}": last_acts[label] for label in layer_labels},
+        **{f"mean_{label}": mean_acts[label] for label in layer_labels},
+        token_counts  = token_counts,
+        nll           = nll,
         layer_labels  = np.array(layer_labels),
         layer_indices = layer_indices,
         n_layers      = np.int32(n_layers),
