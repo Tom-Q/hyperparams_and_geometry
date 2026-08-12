@@ -1,17 +1,17 @@
 """Extract hidden-state activations from a Pythia (or other HF) model.
 
-For each of 128 stimuli, runs a forward pass and saves activations at every
-layer (embedding + all transformer blocks). Processes one stimulus at a time
-(no batching) to minimise memory.
+For each of 256 stimuli (128 request + 128 passage), runs a forward pass and
+saves activations at every layer (embedding + all transformer blocks).
+Processes one stimulus at a time (no batching) to minimise memory.
 
 Model weights are downloaded into a temporary directory and deleted after
 extraction, so only one checkpoint is on disk at a time.
 
 Output npz keys per model:
-  last_emb, last_L1 … last_L{n}   (128, d_model) float32  — last-token
-  mean_emb, mean_L1 … mean_L{n}   (128, d_model) float32  — mean-pool
-  token_counts                     (128,)          int32   — tokens per stimulus
-  nll                              (128,)          float32 — mean per-token NLL
+  last_emb, last_L1 … last_L{n}   (256, d_model) float32  — last-token
+  mean_emb, mean_L1 … mean_L{n}   (256, d_model) float32  — mean-pool
+  token_counts                     (256,)          int32   — tokens per stimulus
+  nll                              (256,)          float32 — mean per-token NLL
   layer_labels, n_layers, d_model  — metadata
 
 Usage — Pythia checkpoint:
@@ -43,7 +43,7 @@ import torch
 REPO_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-STIMULI_PATH = REPO_ROOT / "docs" / "stimuli_v2.0.json"
+STIMULI_PATH = REPO_ROOT / "docs" / "stimuli_v5.1.json"
 OUTPUT_DIR   = REPO_ROOT / "output" / "production" / "llm" / "activations"
 
 

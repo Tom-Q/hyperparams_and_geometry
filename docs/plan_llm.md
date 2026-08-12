@@ -21,10 +21,11 @@ The study has two components with different questions:
 
 ## Stimuli
 
-**File:** `docs/stimuli_v2.0.json` — 128 stimuli, read-only. Do not modify.
+**File:** `docs/stimuli_v5.1.json` — 256 stimuli, read-only. Do not modify.
 
-**Design:** 8 themes × 4 tasks × 4 items = 128 stimuli, hierarchically ordered. Row order in the
-JSON defines canonical RDM order.
+**Design:** 256 stimuli in two halves, row order defines canonical RDM order.
+- s001–s128 (`mode=request`): 8 themes × 4 tasks × 4 items — instruction/question stimuli for instruct models
+- s129–s256 (`mode=passage`): 8 genres × 4 subgenres × 4 items — declarative text passages for base models
 
 | Theme | Tasks |
 |---|---|
