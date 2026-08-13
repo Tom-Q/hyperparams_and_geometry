@@ -2,20 +2,19 @@
 
 ## Overview
 
-Extension O.3 from the main analysis plan. The same RSA framework applied to open-source LLMs,
-using a structured prompt set as stimuli. The goal is to verify whether the findings from small
-trained-from-scratch networks generalise to the large pretrained model regime — not to produce a
-self-contained LLM paper.
+Extension O.3 from the main analysis plan. The RSA framework applied to open-source LLMs using a
+structured prompt set as stimuli. Goal: verify whether findings from small trained-from-scratch
+networks generalise to the large pretrained model regime.
 
-The study has two components with different questions:
+Three components:
 
-- **Final-checkpoint analysis (~11 models):** Basic RSA validity checks and descriptive summary
-  statistics across a set of architecturally and family-diverse models. Low n limits this to
-  descriptive work — no statistical tests of HP effects.
-- **Pythia training dynamics (6 sizes × ~15 checkpoints each):** The main quantitative
-  contribution. Pythia's fixed training setup and published checkpoints enable a direct analogue
-  of Finding 3 (crystallisation, critical period, trajectory mapping), controlling for family,
-  data, and training recipe while varying only model size.
+- **Final-checkpoint cross-model analysis:** RSA validity, category structure, dimensionality,
+  and base/instruct comparisons across a family-diverse set of models.
+- **Pythia training dynamics (6 sizes × 16 checkpoints):** Direct analogue of Finding 3.
+  Controls for family, data, and recipe while varying model size.
+- **OLMo training dynamics (1 size × 16 checkpoints):** Replication of the training dynamics
+  analyses in a second architecture, testing whether crystallisation and critical-period phenomena
+  are architecture-general.
 
 ---
 
@@ -23,9 +22,14 @@ The study has two components with different questions:
 
 **File:** `docs/stimuli_v5.1.json` — 256 stimuli, read-only. Do not modify.
 
-**Design:** 256 stimuli in two halves, row order defines canonical RDM order.
-- s001–s128 (`mode=request`): 8 themes × 4 tasks × 4 items — instruction/question stimuli for instruct models
-- s129–s256 (`mode=passage`): 8 genres × 4 subgenres × 4 items — declarative text passages for base models
+**Design:** Two parallel halves, row order defines canonical RDM order.
+
+- **s001–s128 (`mode=request`):** 8 themes × 4 tasks × 4 items — instruction/question stimuli.
+  Meaningful for instruct-tuned models.
+- **s129–s256 (`mode=passage`):** 8 genres × 4 subgenres × 4 items — declarative text passages
+  written as pastiches of named real-world style anchors. Meaningful for base models.
+
+Request half themes:
 
 | Theme | Tasks |
 |---|---|
@@ -38,249 +42,237 @@ The study has two components with different questions:
 | `political_argument` | immigration, taxation, criminal_justice, environment |
 | `roleplay` | war_and_peace, pride_and_prejudice, star_wars, thousand_and_one_nights |
 
-The 128 stimuli function as a single task (analogous to a single task in the main study). Each
-model is one data point.
-
-**Format:** `free_form` (majority) and `multiple_choice` (fables, proverbs, protagonist,
-pronoun_reference). Multiple-choice stimuli include the answer options in the prompt text; no
-special handling needed.
+Passage half genres: fiction, journalism, stem_prose, interactive, correspondence, commercial,
+legal_bureaucratic, instructional.
 
 ---
 
 ## Models
 
-### Final-checkpoint set (~11 models)
+### Final-checkpoint set
 
-One model at a time. Run sequentially, not in parallel.
+**Pythia series — capacity axis (EleutherAI, base only)**
 
-**Pythia series — primary within-family size axis (EleutherAI)**
-
-| Model | Parameters | d_model | n_layers |
-|---|---|---|---|
-| pythia-70m | 70M | 512 | 6 |
-| pythia-160m | 160M | 768 | 12 |
-| pythia-410m | 410M | 1024 | 24 |
-| pythia-1b | 1B | 2048 | 16 |
-| pythia-1.4b | 1.4B | 2048 | 24 |
-| pythia-2.8b | 2.8B | 2560 | 32 |
-
-For the final-checkpoint analysis, use the final Pythia checkpoint (step 143000).
-
-**Cross-family models**
-
-| Model | Parameters | Notes |
+| Model | n_layers | d_model |
 |---|---|---|
-| `meta-llama/Llama-3.2-1B` | 1B | Llama architecture |
-| `Qwen/Qwen2.5-1.5B` | 1.5B | Multilingual |
-| `HuggingFaceTB/SmolLM2-1.7B` | 1.7B | HF compact model |
-| `google/gemma-2-2b` | 2B | Requires HF license (one click) |
+| pythia-70m | 6 | 512 |
+| pythia-160m | 12 | 768 |
+| pythia-410m | 24 | 1024 |
+| pythia-1b | 16 | 2048 |
+| pythia-1.4b | 24 | 2048 |
+| pythia-2.8b | 32 | 2560 |
 
-**Optional outgroup (non-transformer)**
-- `state-spaces/mamba-130m` — include if extraction is straightforward; treat as outgroup in
-  descriptive comparisons, interpret layer indices carefully.
+**Cross-family base + instruct pairs — architecture/recipe axis**
 
-### Pythia training checkpoints
+| Base | Instruct | n_layers | d_model |
+|---|---|---|---|
+| `meta-llama/Llama-3.2-1B` | `meta-llama/Llama-3.2-1B-Instruct` | 16 | 2048 |
+| `Qwen/Qwen2.5-1.5B` | `Qwen/Qwen2.5-1.5B-Instruct` | 28 | 1536 |
+| `HuggingFaceTB/SmolLM2-1.7B` | `HuggingFaceTB/SmolLM2-1.7B-Instruct` | 24 | 2048 |
+| `google/gemma-2-2b` | `google/gemma-2-2b-it` | 26 | 2304 |
 
-Pythia was trained for ~143,000 gradient steps on 300B tokens. 154 checkpoints are available on
-HuggingFace. Select ~15, approximately log-spaced:
+**OLMo — second architecture with training checkpoints (AllenAI)**
 
-`step1, step2, step4, step8, step16, step32, step64, step128, step256, step512, step1000,
-step2000, step8000, step32000, step64000, step143000`
+| Model | Role | n_layers | d_model |
+|---|---|---|---|
+| `allenai/OLMo-1B-0724-hf` | Base, training dynamics | 16 | 2048 |
+| `allenai/OLMo-2-0425-1B-SFT` | SFT (base → SFT on Tülu 3) | 16 | 2048 |
+| `allenai/OLMo-2-0425-1B-Instruct` | Instruct (SFT + DPO + RLVR) | 16 | 2048 |
 
-Use the same 15 checkpoints for all 6 Pythia sizes. This yields ~90 model states total for the
-training dynamics analyses.
+### Training dynamics checkpoints
+
+**Pythia** — 16 log-spaced checkpoints across 143,000 steps (300B tokens):
+`step1, step2, step4, step8, step16, step32, step64, step128, step256, step512,
+step1000, step2000, step8000, step32000, step64000, step143000`
+
+**OLMo** — 16 log-spaced checkpoints across 1,454,000 steps (~3T tokens):
+`step1000-tokens2B, step2000-tokens4B, step3000-tokens6B, step4500-tokens9B,
+step7000-tokens14B, step11000-tokens23B, step18000-tokens37B, step30000-tokens62B,
+step49000-tokens102B, step79000-tokens165B, step128000-tokens268B, step209000-tokens438B,
+step339000-tokens710B, step551000-tokens1155B, step895000-tokens1876B, step1454000-tokens3048B`
 
 ---
 
 ## Activation Extraction
 
-### Loading
+**Status: complete.** All 122 model states extracted.
 
-```python
-from transformers import AutoModelForCausalLM, AutoTokenizer
-model = AutoModelForCausalLM.from_pretrained(
-    model_id,
-    torch_dtype=torch.bfloat16,
-    device_map="auto",
-    output_hidden_states=True,
-)
+Output format per npz file:
+- `last_{label}`, `mean_{label}` — (256, d_model) float32 — last-token and mean-pool at every
+  layer (emb + L1 … L{n_layers})
+- `token_counts` — (256,) int32 — tokens per stimulus for this tokenizer
+- `nll` — (256,) float32 — mean per-token NLL
+- `layer_labels`, `n_layers`, `d_model` — metadata
+
+Row order matches the stimulus JSON: rows 0–127 = request half, rows 128–255 = passage half.
+
+---
+
+## RDM Construction (`build_llm_rdms.py`)
+
+**Metric:** Pearson correlation distance (1 − r) as primary; cosine distance as secondary.
+Equivalently: mean-centre activation matrix across stimuli, then compute cosine distances.
+
+**Pooling:** Last-token as primary; mean-pool as secondary.
+
+**Stimulus subsets:** For each model, compute three RDMs per layer:
+- `full` — 256×256, all stimuli
+- `request` — 128×128, rows 0–127
+- `passage` — 128×128, rows 128–255
+
+All three subsets are computed for every model regardless of base/instruct status. We do not pre-decide which half is "meaningful" for a given model type — that is an empirical question (see A.1, A.5). The difference between how a base model represents request stimuli vs. how an instruct model does is itself a finding.
+
+**Layers:** All layers (emb + all transformer blocks).
+
+**Visualisation:** For each model (at all checkpoints for dynamics models), save the `full` RDM
+at the final layer as a PNG. Compile a PDF with one row per model:
+- Pythia dynamics: 6 rows (one per size), 16 columns (checkpoints, early→late)
+- OLMo dynamics: 1 row, 16 columns
+
+**Output structure:**
 ```
-
-`output_hidden_states=True` returns a tuple of `(batch, seq_len, d_model)` tensors — one per
-transformer block plus the embedding layer.
-
-### Representation: last token
-
-For all decoder-only models (all primary models), use the **last-token representation** at each
-layer: `hidden_state[layer][:, -1, :]`. This is the natural representation for autoregressive
-models and is directly analogous to using the last hidden layer in the main study.
-
-### Distance metric
-
-Use **Pearson correlation distance** (1 − Pearson r between activation vectors across units) as
-the primary RDM metric, consistent with the ANN representational geometry literature. This is
-equivalent to cosine distance on mean-centred vectors and avoids artefacts from scale differences
-across model families. Concretely: mean-centre each (128, d_model) activation matrix across
-stimuli, then compute cosine distances.
-
-### Layer selection and output format
-
-For the final-checkpoint cross-model analysis, extract **four relative-depth layers** per model:
-
-| Label | Relative depth |
-|---|---|
-| emb | 0 (embedding, no contextual processing) |
-| L50 | 0.50 (middle) |
-| L75 | 0.75 (upper-middle) |
-| Lout | 1.00 (final transformer block) |
-
-For Pythia training dynamics, extract **Lout only** (final block) at each of the 15 checkpoints.
-This is sufficient for the crystallisation and trajectory analyses and keeps storage manageable.
-
-**Output format** — one `.npz` per (model, checkpoint):
-
+output/production/llm/
+  activations/          — npz files (complete)
+  rdms/
+    {slug}_last_full.npz        — all layers, full 256×256
+    {slug}_last_request.npz     — all layers, request 128×128
+    {slug}_last_passage.npz     — all layers, passage 128×128
+  figures/
+    rdm_gallery_pythia.pdf
+    rdm_gallery_olmo.pdf
 ```
-activations_{model_slug}_step{step}.npz
-  hidden_states  : (n_selected_layers, 128, d_model)  float32
-  layer_indices  : (n_selected_layers,)  int32
-  model_id       : str
-  step           : int
-```
-
-`model_slug` replaces `/` with `__`.
-
-**Memory:** load one model, extract all layers for all 128 stimuli, save, then
-`del model; torch.cuda.empty_cache()` before loading the next.
 
 ---
 
 ## Analysis
 
-The three analyses below mirror Findings 1, 2 (partially), and 3 of the main study.
+### Layer sets
+
+Models have different depths (6–32 layers), so layers are referred to by percentile position
+to allow cross-model comparison. For a model with n transformer blocks:
+
+- **Percentile layer** p% → `round(p / 100 * n)`, clamped to [1, n]
+- **Last 3 layers** → L{n}, L{n−1}, L{n−2}
+
+Layer sets used per analysis:
+
+| Analysis | Layers |
+|---|---|
+| A.1 cross-model agreement | 10th, 50th, 90th percentile + last 3 |
+| A.2 category structure | 10th, 30th, 50th, 70th, 90th percentile + last |
+| A.3 dimensionality | 10th, 30th, 50th, 70th, 90th percentile + last |
+| A.4 depth profiles | All layers (emb + L1 … L{n}) |
+| A.5 base/instruct comparison | Empirically chosen from A.1 + A.2 results |
+| A.6 summary table | Empirically chosen from A.1 + A.2 results |
+| A.7 cross-model matrix | Empirically chosen from A.1 + A.2 results |
+| B/C dynamics | Empirically chosen from A.1 + A.4 results |
+
+**Layer selection rule:** For analyses that require a single layer (A.5–A.7, B/C), we look at
+both cross-model agreement (A.1) and category structure correlation (A.2/A.4) and choose the
+layer that scores highest on both. If the two criteria disagree, we report results at each
+candidate layer. This guards against systematic bias: cross-model agreement may favour early
+layers if models share surface-form biases; category structure may favour layers that match our
+assumed structure even if models are noisy there.
 
 ---
 
-### A. Final-checkpoint: RSA validity and summary statistics
+### A. Final-checkpoint cross-model
 
-Applies to all ~11 final-checkpoint models, using Lout activations. Small n means this is
-descriptive — no HP regression or latent variable analysis.
+#### A.1 Cross-model agreement
+Leave-one-out: for each model, correlate its RDM with the mean RDM of all other models.
+Average over models. Computed at: 10th, 50th, 90th percentile layers and last 3 layers
+(L{n}, L{n−1}, L{n−2}). Computed separately for the request half, passage half, and full set.
 
-#### A.1 Noise ceiling (≈ Finding 1.1)
+This is a theory-neutral measure of inter-model consistency — it does not assume anything about
+what the representational structure should be. Called "cross-model agreement" (not noise ceiling)
+because it measures model similarity, not measurement reliability. A high value at a layer means
+models systematically agree on pairwise stimulus distances there; low means models diverge.
 
-For each model, correlate its Lout RDM with the mean RDM of all other models (leave-one-out).
-Distribution of these correlations = the noise ceiling.
+#### A.2 Category structure
+Correlate each model's RDM with ideal block-diagonal RDMs encoding the stimulus hierarchy
+(theme-level, task-level). Use Kendall τ. Layers: 10th, 30th, 50th, 70th, 90th percentile + last.
+Compute for request half (theme/task structure) and passage half (genre/subgenre structure)
+separately. This is an assumption-laden measure — it rewards models that organise stimuli the
+way we expect; interpret alongside A.1 which is assumption-free.
 
-With only ~11 models this is low-powered. Report mean ± SD and the full distribution.
-Compare against the noise ceilings from the main study tasks as qualitative reference: are
-large LLMs more or less consistent with each other than small trained networks are with each other?
+For crossed themes (translation: content × language; poetry: topic × form; politics: issue ×
+stance), correlate with competing ideal RDMs to assess whether the model organises by one
+dimension or the other.
 
-#### A.2 Category structure (≈ Finding 1.3)
+#### A.3 Effective dimensionality
+Participation ratio of the stimulus-space covariance matrix. Layers: 10th, 30th, 50th, 70th,
+90th percentile + last. Compute for request and passage halves separately.
 
-The main analysis correlates each network's RDM with a block-diagonal "category model" RDM that
-encodes the task structure. The LLM analogue uses the three levels of the stimulus hierarchy:
+#### A.4 Layer depth profiles
+Plot category structure (τ with theme/task RDM) and dimensionality (PR) as a function of
+normalised layer depth (0–1) for each model. Group by family. Compare request vs passage halves.
 
-- **Theme RDM:** dissimilarity = 0 within theme (16 stimuli), 1 across — 8 blocks of 16
-- **Task RDM:** dissimilarity = 0 within task (4 stimuli), 1 across — 32 blocks of 4
-- **Item RDM:** all off-diagonal = 1 (items are definitionally distinct; not expected to be informative)
+#### A.5 Base vs instruct comparison
+Layer: empirically chosen from A.1 + A.2 results.
 
-For each model, compute Kendall τ between the Lout RDM and each ideal RDM. This directly answers:
-do LLMs organise stimuli according to the design hierarchy?
+For each base/instruct pair (Llama, Qwen, SmolLM2, Gemma, OLMo), directly compare:
+- RDM similarity between base and instruct (how much does instruction tuning change geometry?).
+  Compute for both stimulus halves separately — the degree of change may differ by half.
+- Category structure: compare theme/task organisation on request half and genre/subgenre
+  organisation on passage half, for both model types. We make no prior assumptions about which
+  model type performs better on which half; the cross (base on request, instruct on passage) is
+  as interesting as the match (base on passage, instruct on request).
 
-Compute this for all four extracted layers (emb, L50, L75, Lout) to see whether category structure
-builds up through the network — a direct analogue of Finding 1.4.
+#### A.6 Summary statistics table
+Per model: cross_model_agreement (A.1), category_corr_theme, category_corr_task (A.2),
+dimensionality (A.3), mean_dissimilarity. Report for request and passage halves separately.
+Layer: empirically chosen from A.1 + A.2. Group by family.
 
-#### A.3 Effective dimensionality (≈ Finding 1.5)
-
-For each model, compute the participation ratio of the (128 × 128) stimulus-space covariance
-matrix of Lout activations (same formula as the main study, computed in stimulus space):
-
-```
-PR = (Σ λ_i)² / Σ λ_i²
-```
-
-Does PR vary with model size? Does it correlate with noise ceiling?
-
-#### A.4 Summary statistics table
-
-Compute the four per-network RDM summary statistics from the main plan for each model:
-
-- `reliability`: correlation with group mean RDM (from A.1)
-- `category_corr_theme`, `category_corr_task`: τ with ideal RDMs (from A.2)
-- `dimensionality`: participation ratio (from A.3)
-- `mean_dissimilarity`: mean of RDM upper triangle
-
-Report in a table grouped by family (Pythia sizes together, cross-family models together).
-Do not fit a regression or run a significance test — n is too small.
-
----
-
-### B. Pythia training dynamics (≈ Finding 3)
-
-Pythia provides the controlled within-family variation needed for the training dynamics analyses.
-All analyses in this section use Lout activations at the 15 selected checkpoints.
-
-#### B.1 Crystallisation (≈ Finding 3.1)
-
-For each Pythia size, compute the Spearman correlation between the RDM at each checkpoint and the
-RDM at the final checkpoint (step 143000). Plot correlation as a function of training step
-(log-scaled). When does geometry stabilise (reach ≥ 0.99 and stay there)?
-
-This directly mirrors script 31/32. The question: do larger Pythia models crystallise earlier or
-later in training (as a fraction of total steps)?
-
-#### B.2 Critical period — rate of representational change (≈ Finding 3.2)
-
-For each consecutive checkpoint pair, compute the RDM dissimilarity (1 − Spearman r) divided by
-the log interval length (in steps). This gives the rate of representational change per unit log
-training time, normalised to make early and late intervals comparable.
-
-Plot change rate vs. training step for each Pythia size. Is there an early critical period of
-rapid change followed by stabilisation? Does this pattern change with model size?
-
-#### B.3 Trajectory mapping (≈ Finding 3.4)
-
-Flatten each checkpoint RDM to its upper triangle. For each Pythia size, MDS on the dissimilarity
-matrix between all 15 checkpoint RDM vectors, coloured by training step (light = early, dark =
-late). Joint embedding across all 6 sizes shows whether different sizes follow parallel trajectories
-or diverge early.
-
-#### B.4 RDM gallery through training (≈ Finding 3.5)
-
-For each Pythia size (6 panels), display the 128×128 RDM at each of the 15 training checkpoints,
-with the training step labelled. Rows = Pythia sizes (small to large), columns = checkpoints
-(early to late). Provides the visual ground truth that anchors the quantitative analyses in B.1–B.3.
+#### A.7 Cross-model RSA matrix
+Pairwise RDM correlations between all 17 models. Layer: empirically chosen from A.1 + A.2.
+Compute separately for request half, passage half, and full set — comparing the three matrices
+shows how much stimulus type affects model similarity. MDS/clustering to visualise model
+similarity. Colour by family and base/instruct status.
 
 ---
 
-## Implementation
+### B. Pythia training dynamics
 
-### Scripts
+All analyses use last-token activations at all 16 checkpoints × 6 sizes.
+Layer: empirically chosen from A.1 (cross-model agreement) and A.4 (depth profiles) at the
+final Pythia checkpoints, looking at both criteria before deciding to guard against systematic
+bias. Passage half as primary stimulus set (base models); request half also computed.
+
+#### B.1 Crystallisation
+Spearman correlation between each checkpoint's RDM and the final checkpoint RDM, per size.
+Plot on log-scaled step axis. Does geometry stabilise earlier (as fraction of training) for
+larger models?
+
+#### B.2 Critical period — rate of change
+RDM dissimilarity between consecutive checkpoints divided by log interval length. Plot per size.
+Is there an early burst of rapid change?
+
+#### B.3 Trajectory MDS
+MDS on pairwise RDM dissimilarities across checkpoints. Joint embedding across all 6 sizes,
+coloured by training step. Do sizes follow parallel or diverging trajectories?
+
+#### B.4 RDM gallery
+Grid of RDM images: 6 rows (sizes) × 16 columns (checkpoints). Compiled into PDF.
+
+---
+
+### C. OLMo training dynamics
+
+Same analyses as B.1–B.4 for OLMo-1B-0724. Single row in the RDM gallery PDF.
+
+#### C.5 Cross-architecture comparison
+Overlay OLMo and Pythia-1B crystallisation curves and change-rate curves on the same plot.
+Both are 1B-class models; differences reflect architecture and data rather than capacity.
+
+---
+
+## Scripts
 
 ```
 scripts/
-  extract_llm_activations.py   — tokenize stimuli, run forward pass, save hidden states
-  build_llm_rdms.py            — mean-centre, compute Pearson distance RDMs, save .npy
-  analyze_llm_final.py         — analyses A.1–A.4
-  analyze_llm_pythia.py        — analyses B.1–B.4
-```
-
-`extract_llm_activations.py` takes `--model-id`, `--step` (for Pythia), and `--output-dir`.
-Run one model at a time from the command line.
-
-### Output structure
-
-```
-output/production/llm/
-  activations/
-    EleutherAI__pythia-70m_step143000.npz
-    EleutherAI__pythia-70m_step64000.npz
-    ...
-    meta-llama__Llama-3.2-1B_step143000.npz
-    ...
-  rdms/
-    rdm_EleutherAI__pythia-70m_step143000_Lout.npy
-    ...
-  figures/
-  tables/
-    rdm_stats_final.csv
+  extract_llm_activations.py    — complete
+  run_llm_extraction.sh         — complete
+  build_llm_rdms.py             — next
+  analyze_llm_final.py          — analyses A.1–A.7
+  analyze_llm_dynamics.py       — analyses B.1–B.4 and C.1–C.5
 ```
