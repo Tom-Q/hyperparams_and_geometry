@@ -430,16 +430,14 @@ def select_best_layer(df_a1, df_a4, override=None):
     print(f"  Cross-model agreement (A.1): best at pct={best_pct_by_agreement}")
     print(f"  Category structure τ (A.4):  median best depth = {median_best_depth:.2f}")
 
-    # Use Lout as the summary layer for A.5-A.7 (deepest, theory-neutral tie-breaker)
-    # and report which agrees with A.1/A.4 criterion
-    selected = "Lout"
-    print(f"  → Using {selected} (last transformer layer) for A.5–A.7")
+    selected = "pct90"
+    print(f"  → Using {selected} (90th-percentile layer, category-structure peak) for A.5–A.7")
     print(f"    Override with --best-layer if you prefer a different layer.")
     return selected
 
 
 def resolve_layer_label(model_id, revision, position_or_label):
-    """Resolve 'Lout', 'Lout-1', 'Lout-2', or an absolute label like 'L24'."""
+    """Resolve 'Lout', 'Lout-1', 'Lout-2', 'pctN' (e.g. 'pct90'), or an absolute label."""
     layer_labels = get_layer_labels(model_id, revision)
     transformer = [l for l in layer_labels if l != "emb"]
     if position_or_label == "Lout":
@@ -448,6 +446,9 @@ def resolve_layer_label(model_id, revision, position_or_label):
         return transformer[-2]
     elif position_or_label == "Lout-2":
         return transformer[-3]
+    elif position_or_label.startswith("pct"):
+        pct = int(position_or_label[3:])
+        return pct_layer_label(layer_labels, pct)
     else:
         assert position_or_label in layer_labels, \
             f"Layer {position_or_label!r} not found in {layer_labels}"
@@ -747,7 +748,9 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--pooling",    default="last", choices=["last", "mean"])
     parser.add_argument("--best-layer", default=None,
-                        help="Override automatic layer selection, e.g. 'Lout' or 'L24'")
+                        help="Override automatic layer selection, e.g. 'pct90', 'Lout', 'L24'")
+    parser.add_argument("--downstream-only", action="store_true",
+                        help="Skip A.1–A.4 and load saved CSVs; re-run only A.5–A.7 and figures")
     args = parser.parse_args()
 
     FIG_DIR.mkdir(parents=True, exist_ok=True)
@@ -761,12 +764,19 @@ def main():
         if "_layer_labels" not in m:
             m["_layer_labels"] = get_layer_labels(m["model_id"], m["revision"])
 
-    df_a1 = run_a1(args.pooling)
-    df_a2 = run_a2(args.pooling, ideal_rdms)
-    df_a3 = run_a3(args.pooling)
-    df_a4 = run_a4(args.pooling, ideal_rdms)
-
-    best_layer = select_best_layer(df_a1, df_a4, override=args.best_layer)
+    if args.downstream_only:
+        print("-- downstream-only: loading saved A.1–A.4 CSVs --")
+        df_a1 = pd.read_csv(TAB_DIR / "llm_a1_cross_model_agreement.csv")
+        df_a2 = pd.read_csv(TAB_DIR / "llm_a2_category_structure.csv")
+        df_a3 = pd.read_csv(TAB_DIR / "llm_a3_dimensionality.csv")
+        df_a4 = pd.read_csv(TAB_DIR / "llm_a4_depth_profiles.csv")
+        best_layer = args.best_layer or select_best_layer(df_a1, df_a4)
+    else:
+        df_a1 = run_a1(args.pooling)
+        df_a2 = run_a2(args.pooling, ideal_rdms)
+        df_a3 = run_a3(args.pooling)
+        df_a4 = run_a4(args.pooling, ideal_rdms)
+        best_layer = select_best_layer(df_a1, df_a4, override=args.best_layer)
 
     df_a5 = run_a5(args.pooling, best_layer, ideal_rdms)
     df_a6 = run_a6(df_a1, df_a2, df_a3, best_layer)
