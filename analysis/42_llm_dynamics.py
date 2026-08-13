@@ -173,17 +173,24 @@ def rate_of_change(model_id, n_layers, checkpoints, pooling, subset, pct=90):
     return pd.DataFrame(rows)
 
 
-# ── B.3  Trajectory MDS — joint across all Pythia sizes ───────────────────────
+# ── B.3 / C.3  Trajectory MDS — joint across all Pythia sizes + OLMo ──────────
 
-def trajectory_mds_pythia(pooling, subset, pct=90):
-    """Joint MDS over all 6 sizes × 16 checkpoints = 96 points."""
+def trajectory_mds_joint(pooling, subset, pct=90):
+    """Joint MDS: 6 Pythia sizes × 16 checkpoints + OLMo × 16 = 112 points."""
     all_rdms, labels = [], []
     for s in PYTHIA_SIZES:
         lbl = pct_layer_label(s["n_layers"], pct)
         for rev in PYTHIA_CHECKPOINTS:
             all_rdms.append(load_rdm(s["model_id"], rev, pooling, subset, lbl))
-            labels.append(dict(size=s["label"], step=checkpoint_step(rev),
+            labels.append(dict(model=s["label"], family="pythia",
+                               step=checkpoint_step(rev),
                                tokens_b=checkpoint_tokens_b(rev)))
+    olmo_lbl = pct_layer_label(OLMO_N_LAYERS, pct)
+    for rev in OLMO_CHECKPOINTS:
+        all_rdms.append(load_rdm(OLMO_MODEL, rev, pooling, subset, olmo_lbl))
+        labels.append(dict(model="OLMo-1B", family="olmo",
+                           step=checkpoint_step(rev),
+                           tokens_b=checkpoint_tokens_b(rev)))
     n = len(all_rdms)
     dissim = np.zeros((n, n))
     for i in range(n):
@@ -194,24 +201,6 @@ def trajectory_mds_pythia(pooling, subset, pct=90):
               normalized_stress=False, n_init=1)
     coords = mds.fit_transform(dissim)
     return coords, labels
-
-
-# ── C.3  Trajectory MDS — OLMo ────────────────────────────────────────────────
-
-def trajectory_mds_olmo(pooling, subset, pct=90):
-    lbl = pct_layer_label(OLMO_N_LAYERS, pct)
-    rdms = np.stack([load_rdm(OLMO_MODEL, rev, pooling, subset, lbl) for rev in OLMO_CHECKPOINTS])
-    n = len(rdms)
-    dissim = np.zeros((n, n))
-    for i in range(n):
-        for j in range(i + 1, n):
-            d = 1 - rdm_corr(rdms[i], rdms[j])
-            dissim[i, j] = dissim[j, i] = d
-    mds = MDS(n_components=2, dissimilarity="precomputed", random_state=42,
-              normalized_stress=False, n_init=1)
-    coords = mds.fit_transform(dissim)
-    steps = [checkpoint_step(r) for r in OLMO_CHECKPOINTS]
-    return coords, steps
 
 
 # ── Figures ───────────────────────────────────────────────────────────────────
@@ -276,45 +265,46 @@ def plot_rate_of_change(rate_pythia, rate_olmo, subset):
     plt.close(fig)
 
 
-def plot_trajectory_mds_pythia(coords, labels, subset):
-    """Joint MDS: all 6 sizes × 16 checkpoints in one panel, colour=size."""
-    fig, ax = plt.subplots(figsize=(8, 6))
-    n_ckpts = len(PYTHIA_CHECKPOINTS)
-    log_steps = np.log10([checkpoint_step(r) for r in PYTHIA_CHECKPOINTS])
-    norm = plt.Normalize(log_steps.min(), log_steps.max())
-    cmap = cm.plasma
-
-    for s_idx, s in enumerate(PYTHIA_SIZES):
-        start = s_idx * n_ckpts
-        end   = start + n_ckpts
-        seg_coords = coords[start:end]
-        seg_steps  = log_steps
-
-        color = SIZE_COLORS[s["label"]]
-        # trajectory line
-        for i in range(len(seg_coords) - 1):
-            ax.plot(seg_coords[i:i+2, 0], seg_coords[i:i+2, 1],
-                    color=color, lw=1.5, alpha=0.7)
-        # dots coloured by step
-        sc = ax.scatter(seg_coords[:, 0], seg_coords[:, 1],
-                        c=seg_steps, cmap=cmap, norm=norm, s=40,
-                        edgecolors=color, linewidths=0.8, zorder=3)
-        # label start and end
-        ax.annotate(f"{s['label']}▶", seg_coords[0],  fontsize=6, color=color,
-                    xytext=(3, 3), textcoords="offset points")
-        ax.annotate(f"◀{s['label']}", seg_coords[-1], fontsize=6, color=color,
-                    xytext=(3, 3), textcoords="offset points")
-
+def plot_trajectory_mds_joint(coords, labels, subset):
+    """Joint MDS: all Pythia sizes + OLMo in one panel. Colour = model, alpha = training progress."""
     from matplotlib.lines import Line2D
-    legend_elements = [Line2D([0], [0], color=SIZE_COLORS[s["label"]], lw=2,
-                               label=f"Pythia-{s['label']}")
-                       for s in PYTHIA_SIZES]
+
+    TRAJ_COLORS = {**{s["label"]: SIZE_COLORS[s["label"]] for s in PYTHIA_SIZES},
+                   "OLMo-1B": "#b07aa1"}
+
+    fig, ax = plt.subplots(figsize=(9, 7))
+
+    # Group indices by model
+    models_in_order = [s["label"] for s in PYTHIA_SIZES] + ["OLMo-1B"]
+    n_ckpts_per = {s["label"]: len(PYTHIA_CHECKPOINTS) for s in PYTHIA_SIZES}
+    n_ckpts_per["OLMo-1B"] = len(OLMO_CHECKPOINTS)
+
+    idx = 0
+    for model_name in models_in_order:
+        n = n_ckpts_per[model_name]
+        seg = coords[idx: idx + n]
+        color = TRAJ_COLORS[model_name]
+        alphas = np.linspace(0.25, 1.0, n)
+        sizes  = np.linspace(20, 80, n)
+        for i in range(n - 1):
+            ax.plot(seg[i:i+2, 0], seg[i:i+2, 1], color=color, lw=1.5,
+                    alpha=(alphas[i] + alphas[i+1]) / 2)
+        ax.scatter(seg[:, 0], seg[:, 1], color=color, s=sizes,
+                   alpha=alphas, zorder=3)
+        ax.annotate(model_name, seg[-1], fontsize=6, color=color,
+                    xytext=(3, 3), textcoords="offset points", fontweight="bold")
+        idx += n
+
+    legend_elements = [
+        Line2D([0], [0], color=TRAJ_COLORS[s["label"]], lw=2, label=f"Pythia-{s['label']}")
+        for s in PYTHIA_SIZES
+    ] + [Line2D([0], [0], color="#b07aa1", lw=2, label="OLMo-1B")]
     ax.legend(handles=legend_elements, fontsize=8, loc="best")
-    plt.colorbar(sc, ax=ax, label="log₁₀(step)")
     ax.set_xticks([]); ax.set_yticks([])
-    ax.set_title(f"B.3 Trajectory MDS — Pythia all sizes, joint embedding ({subset})", fontsize=10)
+    ax.set_title(f"B.3/C.3 Trajectory MDS — Pythia + OLMo, joint embedding ({subset})\n"
+                 f"dot size/opacity = training progress (small/faint = early)", fontsize=9)
     fig.tight_layout()
-    fig.savefig(FIG_DIR / f"B3_trajectory_mds_{subset}.pdf")
+    fig.savefig(FIG_DIR / f"BC3_trajectory_mds_{subset}.pdf")
     plt.close(fig)
 
 
@@ -428,20 +418,15 @@ def main():
         pd.concat(all_rate_records).to_csv(
             TAB_DIR / f"llm_bc2_rate_{subset}.csv", index=False)
 
-        # B.3 Trajectory MDS — Pythia (joint embedding)
-        print("B.3 Trajectory MDS — Pythia (joint)")
-        pythia_coords, pythia_labels = trajectory_mds_pythia(pooling, subset, pct)
-
-        # C.3 Trajectory MDS — OLMo
-        print("C.3 Trajectory MDS — OLMo")
-        olmo_coords, olmo_steps = trajectory_mds_olmo(pooling, subset, pct)
+        # B.3/C.3 Trajectory MDS — joint Pythia + OLMo
+        print("B.3/C.3 Trajectory MDS — Pythia + OLMo (joint)")
+        joint_coords, joint_labels = trajectory_mds_joint(pooling, subset, pct)
 
         # Figures
         print("Saving figures...")
         plot_crystallisation(cryst_pythia, cryst_olmo, subset)
         plot_rate_of_change(rate_pythia, rate_olmo, subset)
-        plot_trajectory_mds_pythia(pythia_coords, pythia_labels, subset)
-        plot_trajectory_mds_olmo(olmo_coords, olmo_steps, subset)
+        plot_trajectory_mds_joint(joint_coords, joint_labels, subset)
         plot_c5_cross_architecture(cryst_pythia["1b"], cryst_olmo, subset)
 
     print("\nDone.")
