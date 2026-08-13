@@ -133,13 +133,18 @@ at the final layer as a PNG. Compile a PDF with one row per model:
 ```
 output/production/llm/
   activations/          — npz files (complete)
-  rdms/
-    {slug}_last_full.npz        — all layers, full 256×256
-    {slug}_last_request.npz     — all layers, request 128×128
-    {slug}_last_passage.npz     — all layers, passage 128×128
-  figures/
-    rdm_gallery_pythia.pdf
-    rdm_gallery_olmo.pdf
+
+output/analysis/rdms/llm/
+  {slug}_last_full.npz        — all layers, full 256×256
+  {slug}_last_request.npz     — all layers, request 128×128
+  {slug}_last_passage.npz     — all layers, passage 128×128
+  {slug}_last_alllayers.npz   — single RDM from all layers concatenated
+  (mean_ variants for all of the above)
+
+output/analysis/figures/llm/
+  rdm_{slug}_last_Lout.png
+  rdm_gallery_pythia.pdf
+  rdm_gallery_olmo.pdf
 ```
 
 ---
@@ -272,7 +277,9 @@ Both are 1B-class models; differences reflect architecture and data rather than 
 scripts/
   extract_llm_activations.py    — complete
   run_llm_extraction.sh         — complete
-  build_llm_rdms.py             — next
-  analyze_llm_final.py          — analyses A.1–A.7
-  analyze_llm_dynamics.py       — analyses B.1–B.4 and C.1–C.5
+
+analysis/
+  40_llm_rdms.py                — complete
+  41_llm_cross_model.py         — analyses A.1–A.7
+  42_llm_dynamics.py            — analyses B.1–B.4 and C.1–C.5 (to do)
 ```
