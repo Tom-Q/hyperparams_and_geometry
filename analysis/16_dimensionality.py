@@ -37,6 +37,7 @@ ANALYSIS = Path(__file__).parent
 sys.path.insert(0, str(ANALYSIS))
 from analysis_utils import (
     DATASET_DIR, FIGURES_DIR, RDM_DIR, TABLES_DIR, TASK_NAMES, RL_TASKS, task_meta, get_depth,
+    task_run_dir,
 )
 
 TASK_DIR_OVERRIDES = {}
@@ -106,8 +107,7 @@ def load_task_dimensionality(task):
     Load best/final npz for all primary networks, compute PR per layer.
     Returns list of dicts.
     """
-    dirname  = TASK_DIR_OVERRIDES.get(task, task)
-    task_dir = DATASET_DIR / dirname
+    task_dir = task_run_dir(task)
     ckpt     = ckpt_name(task)
     h5_path  = RDM_DIR / f"{task}_rdms.h5"
 
@@ -278,7 +278,7 @@ def plot_layer_dimensionality(df, thresholds):
     """
     tasks_depth2 = [t for t in TASK_NAMES
                     if t in df["task"].unique() and
-                    df[(df["task"] == t) & (df["depth"] == 2)]["pr_l1"].notna().sum() > 10]
+                    df[(df["task"] == t) & (df["depth"] == 2)]["pr_l1"].notna().sum() >= 3]
 
     if not tasks_depth2:
         return None
@@ -330,12 +330,19 @@ def plot_layer_dimensionality(df, thresholds):
 # ---------------------------------------------------------------------------
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--task", nargs="+", metavar="TASK",
+                        help="Only recompute these tasks, upserting into the existing CSV.")
+    args = parser.parse_args()
+
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
     TABLES_DIR.mkdir(parents=True, exist_ok=True)
     thresholds = load_thresholds()
 
+    tasks_to_run = args.task if args.task else list(TASK_NAMES)
     all_rows = []
-    for task in TASK_NAMES:
+    for task in tasks_to_run:
         print(f"  {task} ...", end="", flush=True)
         rows = load_task_dimensionality(task)
         if not rows:
@@ -346,10 +353,16 @@ def main():
         print(f" {len(rows)} networks, PR med={np.median(pr_vals):.1f} "
               f"min={np.min(pr_vals):.1f} max={np.max(pr_vals):.1f}")
 
-    df = pd.DataFrame(all_rows)
+    csv_path = TABLES_DIR / "rdm_dimensionality.csv"
+    new_df = pd.DataFrame(all_rows)
+    if args.task and csv_path.exists():
+        existing = pd.read_csv(csv_path)
+        existing = existing[~existing["task"].isin(args.task)]
+        df = pd.concat([existing, new_df], ignore_index=True)
+    else:
+        df = new_df
 
     # Save CSV
-    csv_path = TABLES_DIR / "rdm_dimensionality.csv"
     df.to_csv(csv_path, index=False)
     print(f"\nSaved: {csv_path}")
 

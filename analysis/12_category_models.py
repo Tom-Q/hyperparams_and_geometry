@@ -218,6 +218,27 @@ def models_cifar10(inputs, meta):
     return {"class": D}, {"class": classes}
 
 
+def models_qbert(inputs, meta):
+    """inputs: (53, 4, 84, 84) game frames, sorted pseudo-chronologically.
+    meta: {levels: (53,) int 1-5, progress: (53,) float 0-1, ...}
+    """
+    levels   = meta["levels"].astype(int)    # 1-5 (game level)
+    progress = meta["progress"].astype(float) # within-level progress 0-1
+
+    D_level    = block_model(levels)
+    # Overall chronological progress combining level and within-level progress
+    overall = (levels - 1) / 4.0 + progress / 4.0   # maps to [0, 1]
+    D_progress = graded_model(overall)
+
+    return {
+        "level":    D_level,
+        "progress": D_progress,
+    }, {
+        "level":    levels,
+        "progress": levels,   # sort by level for display
+    }
+
+
 def models_fourrooms(inputs, meta):
     rows = meta["rows"].astype(float)
     cols = meta["cols"].astype(float)
@@ -324,16 +345,26 @@ TASK_FACTORIES = {
     "adding":        (models_adding,      "Adding"),
     "cartpole":      (models_cartpole,    "CartPole"),
     "fourrooms":     (models_fourrooms,   "FourRooms"),
+    "qbert":         (models_qbert,       "Q*bert"),
 }
 
 
 def main():
+    import argparse
     from tasks import TASKS
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--task", nargs="+", metavar="TASK",
+                        help="Only generate models for these tasks (default: all).")
+    args = parser.parse_args()
 
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
 
-    for task_name, (factory, display_name) in TASK_FACTORIES.items():
+    factories = {k: v for k, v in TASK_FACTORIES.items()
+                 if not args.task or k in args.task}
+
+    for task_name, (factory, display_name) in factories.items():
         print(f"  {task_name} ...", end="", flush=True)
         task = TASKS[task_name]()
         inputs, metadata = task.get_rdm_stimuli()

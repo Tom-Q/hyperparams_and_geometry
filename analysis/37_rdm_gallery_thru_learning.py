@@ -23,12 +23,12 @@ import numpy as np
 ANALYSIS  = Path(__file__).parent
 REPO_ROOT = ANALYSIS.parent
 sys.path.insert(0, str(ANALYSIS))
-from analysis_utils import RDM_DIR, TABLES_DIR, FIGURES_DIR, PRODUCTION_DIR, RL_TASKS, TASK_NAMES, get_depth
+from analysis_utils import RDM_DIR, TABLES_DIR, FIGURES_DIR, RL_TASKS, TASK_NAMES, get_depth, is_run_successful, task_run_dir
 
 RNN_TASKS    = {"adding", "mnist_rnn"}
 N_SUCCESS    = 15
 N_FAILED     = 5
-METRIC       = "cosine"
+METRIC       = "pearson"  # default; overridden by --metric
 CELL_W       = 0.80    # inches per column
 CELL_H       = 0.85    # inches per row
 LABEL_W      = 1.6     # left margin for run_id label
@@ -85,7 +85,7 @@ def load_thresholds():
 
 def load_metadata(task, run_id):
     """Return metadata dict from metadata.json, or {} if not found."""
-    path = PRODUCTION_DIR / task / run_id / "metadata.json"
+    path = task_run_dir(task) / run_id / "metadata.json"
     if path.exists():
         return json.load(open(path))
     return {}
@@ -97,7 +97,6 @@ def load_metadata(task, run_id):
 
 def select_networks_gallery(task, thresholds, rng):
     h5_path   = RDM_DIR / f"{task}_rdms.h5"
-    threshold = thresholds.get(task, -float("inf"))
     successful, failed = [], []
 
     with h5py.File(h5_path, "r") as f:
@@ -110,7 +109,7 @@ def select_networks_gallery(task, thresholds, rng):
             lkey = last_layer_key(task, rg)
             if not _rdm_step_exists(rg, lkey):
                 continue
-            if perf >= threshold:
+            if is_run_successful(task, rg, thresholds):
                 successful.append((perf, run_id))
             else:
                 failed.append((perf, run_id))
@@ -307,7 +306,7 @@ def make_gallery_figure(task, nets):
             add_cell(extra_col, nd["final_mat"], border_color="darkblue", extra_lbl=step_lbl)
 
     fig.suptitle(
-        f"{task}  —  RDM gallery through learning  (last hidden layer, cosine distance)\n"
+        f"{task}  —  RDM gallery through learning  (last hidden layer, {METRIC} distance)\n"
         f"Rows: best→worst performance  |  ✓ green = successful  |  ✗ red = failed  "
         f"|  BEST = peak perf checkpoint  |  FINAL = end of training",
         fontsize=6.5, y=1.0,
@@ -320,11 +319,25 @@ def make_gallery_figure(task, nets):
 # ---------------------------------------------------------------------------
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--metric", choices=["cosine", "pearson"], default="pearson")
+    parser.add_argument("--task", nargs="+", metavar="TASK",
+                        help="Only generate gallery figures for these tasks.")
+    args = parser.parse_args()
+
+    global METRIC
+    METRIC = args.metric
+
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
     thresholds = load_thresholds()
     rng = np.random.default_rng(42)
 
+    tasks_to_run = set(args.task) if args.task else set(TASK_NAMES)
+
     for task in TASK_NAMES:
+        if task not in tasks_to_run:
+            continue
         h5_path = RDM_DIR / f"{task}_rdms.h5"
         if not h5_path.exists():
             print(f"{task}: no HDF5, skipping")

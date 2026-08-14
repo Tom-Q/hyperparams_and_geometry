@@ -30,13 +30,13 @@ from sklearn.manifold import MDS
 ANALYSIS  = Path(__file__).parent
 REPO_ROOT = ANALYSIS.parent
 sys.path.insert(0, str(ANALYSIS))
-from analysis_utils import RDM_DIR, TABLES_DIR, FIGURES_DIR, RL_TASKS, TASK_NAMES, get_depth
+from analysis_utils import RDM_DIR, TABLES_DIR, FIGURES_DIR, RL_TASKS, TASK_NAMES, get_depth, is_run_successful
 
 RNN_TASKS = {"adding", "mnist_rnn"}
 N_NETS        = 500          # upper bound on networks; actual count also limited by MAX_POINTS
 MAX_POINTS    = 4500        # hard cap on total vectors entering MDS (networks × checkpoints)
 SUBSAMPLE_MAX = 10_000      # max RDM vector dims for large-vector tasks
-METRIC        = "cosine"
+METRIC        = "pearson"  # default; overridden by --metric
 CMAP      = mcolors.LinearSegmentedColormap.from_list(
     "learning", ["#90ee90", "#4393c3", "#d6604d", "#8b0000", "#000000"]
 )
@@ -97,14 +97,12 @@ def select_networks(task, thresholds, rng, max_nets=N_NETS):
     h5_path   = RDM_DIR / f"{task}_rdms.h5"
     if not h5_path.exists():
         return []
-    threshold = thresholds.get(task, -float("inf"))
     nets = []
     with h5py.File(h5_path, "r") as f:
         for run_id, rg in f["runs"].items():
             if rg.attrs.get("is_repeat", False):
                 continue
-            perf = float(rg.attrs.get("performance", float("nan")))
-            if not (np.isfinite(perf) and perf >= threshold):
+            if not is_run_successful(task, rg, thresholds):
                 continue
             lkey = last_layer_key(task, rg)
             valid = sum(1 for n in rg.keys()
@@ -265,11 +263,25 @@ def make_task_figure(task, thresholds, rng):
 
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--metric", choices=["cosine", "pearson"], default="pearson")
+    parser.add_argument("--task", nargs="+", metavar="TASK",
+                        help="Only generate trajectory MDS for these tasks.")
+    args = parser.parse_args()
+
+    global METRIC
+    METRIC = args.metric
+
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
     thresholds = load_thresholds()
     rng = np.random.default_rng(42)
 
+    tasks_to_run = set(args.task) if args.task else set(TASK_NAMES)
+
     for task in TASK_NAMES:
+        if task not in tasks_to_run:
+            continue
         if not (RDM_DIR / f"{task}_rdms.h5").exists():
             print(f"{task}: no HDF5, skipping")
             continue

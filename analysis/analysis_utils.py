@@ -41,6 +41,7 @@ TASK_NAMES = [
     "adding", "mnist_rnn",
     "cartpole", "fourrooms",
     "cifar10",
+    "qbert",
 ]
 
 # Expected total observations per task (used for inventory completeness checks)
@@ -55,10 +56,15 @@ TASK_EXPECTED_OBS = {
     "cartpole":      1000,
     "fourrooms":     1000,
     "cifar10":       1000,
+    "qbert":           32,
 }
 
 # RL tasks save final.npz (training ends at best performance); others save best.npz
-RL_TASKS = {"cartpole", "fourrooms"}
+RL_TASKS = {"cartpole", "fourrooms", "qbert"}
+
+# Tasks where "successful" is determined by an HDF5 attribute rather than a
+# performance score threshold (Q*bert uses frac_level5 >= 0.5).
+ATTR_SUCCESS_TASKS = {"qbert"}
 
 
 # ---------------------------------------------------------------------------
@@ -138,6 +144,9 @@ def load_task_df(task_name: str, production_dir: Path = None) -> pd.DataFrame:
         production_dir = PRODUCTION_DIR
 
     state_path = Path(production_dir) / task_name / "bo_state.json"
+    # Q*bert lives in production until copied to final_dataset
+    if not state_path.exists() and task_name == "qbert":
+        state_path = OUTPUT_DIR / "production" / "qbert" / "bo_state.json"
     if not state_path.exists():
         raise FileNotFoundError(f"No bo_state.json for {task_name} at {state_path}")
 
@@ -147,6 +156,7 @@ def load_task_df(task_name: str, production_dir: Path = None) -> pd.DataFrame:
 
     rows = []
     for obs in observations:
+        # Q*bert bo_state entries don't have is_repeat / repeat_of / cont_unit_vals
         row = {
             "task":        task_name,
             "paradigm":    meta["paradigm"],
@@ -216,7 +226,7 @@ def disk_inventory(task_name: str, production_dir: Path = None) -> pd.DataFrame:
     if production_dir is None:
         production_dir = PRODUCTION_DIR
 
-    task_dir   = Path(production_dir) / task_name
+    task_dir   = task_run_dir(task_name)
     state_path = task_dir / "bo_state.json"
     observations = json.load(open(state_path))
 
@@ -260,6 +270,34 @@ def metric_output_dirs(metric: str) -> tuple[Path, Path]:
     """Return (figures_dir, tables_dir) for a specific RDM metric."""
     base = ANALYSIS_OUT / metric
     return base / "figures", base / "tables"
+
+
+def task_run_dir(task: str) -> Path:
+    """Return the directory containing run_XXXX_r0/ subdirectories for a task.
+
+    Checks final_dataset first (the canonical location). For Q*bert, which has
+    not yet been copied there, falls back to output/production/qbert.
+    """
+    d = DATASET_DIR / task
+    if d.exists():
+        return d
+    if task == "qbert":
+        return OUTPUT_DIR / "production" / "qbert"
+    return d
+
+
+def is_run_successful(task: str, rg, thresholds: dict) -> bool:
+    """Return True if this run group should be counted as successful/functional.
+
+    Q*bert uses the is_functional HDF5 attribute (frac_level5 >= 0.5).
+    All other tasks compare performance against the per-task score threshold.
+    """
+    is_func = rg.attrs.get("is_functional", None)
+    if is_func is not None:
+        return bool(is_func)
+    perf = float(rg.attrs.get("performance", float("nan")))
+    threshold = thresholds.get(task, -float("inf"))
+    return np.isfinite(perf) and perf >= threshold
 
 
 def primary_df(df: pd.DataFrame) -> pd.DataFrame:

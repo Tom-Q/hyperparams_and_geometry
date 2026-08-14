@@ -7,7 +7,8 @@ scripts/run_qbert_network.py. This task class provides the shared interface
 Stimuli must be pre-built before training analysis networks:
   python scripts/extract_qbert_stimuli.py --model-run-dir output/production/qbert/run_model_r0
 
-Paradigm "qbert" is handled by src/qbert/train.py, not src/train_rl.py.
+Paradigm "rl" means analysis scripts group Q*bert with CartPole/FourRooms.
+Training uses src/qbert/train.py, not src/train_rl.py.
 """
 from pathlib import Path
 
@@ -17,25 +18,29 @@ from .base import Task
 
 REPO_ROOT = Path(__file__).parent.parent
 
+# Analysis networks have use_batch_norm fixed to True — not included here.
+# depth is a Sobol-sampled boolean (1 or 2).
 QBERT_HP_CATEGORICAL = {
-    "use_batch_norm": [True, False],
     "use_attention":  [True, False],
     "use_residual":   [True, False],
+    "depth":          [1, 2],
 }
 
 
 class QbertTask(Task):
     name      = "qbert"
-    paradigm  = "qbert"           # custom; not dispatched through run_task.py
+    paradigm  = "rl"              # grouped with RL tasks in analysis
 
     input_size  = (4, 84, 84)     # stacked grayscale frames, post-AtariPreprocessing
     output_size = 6                # Q*bert discrete action space
     n_steps     = None
 
-    # Thresholds and metrics
-    success_threshold = 15_000.0  # mean eval episode score (early-stop criterion)
-    chance_perf       = 0.0       # random-policy baseline
-    max_metric        = 15_000.0  # ceiling for normalisation (same as success threshold)
+    # Thresholds and metrics.
+    # Note: success is determined by frac_level5 >= 0.5, not by this score threshold.
+    # Analysis scripts use the is_functional HDF5 attribute instead.
+    success_threshold = 15_000.0
+    chance_perf       = 0.0
+    max_metric        = 15_000.0
     metric_name       = "mean_episode_score"
     max_steps         = 60_000_000
 
@@ -57,7 +62,7 @@ class QbertTask(Task):
     def get_rdm_stimuli(self, data_dir="data", seed=42):
         """Load pre-built stimuli from output/production/qbert/stimuli.npz.
 
-        Returns (inputs, metadata) where inputs has shape (44, 4, 84, 84) float32.
+        Returns (inputs, metadata) where inputs has shape (53, 4, 84, 84) float32.
         Run scripts/extract_qbert_stimuli.py to generate stimuli.npz first.
         """
         path = REPO_ROOT / "output" / "production" / "qbert" / "stimuli.npz"

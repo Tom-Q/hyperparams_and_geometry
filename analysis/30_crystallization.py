@@ -37,7 +37,7 @@ PERF_LEVELS = [0.025, 0.05, 0.1, 0.2, 0.4, 0.6, 0.8, 0.85, 0.9, 0.95]
 PARADIGMS = [
     ("Supervised", ["mnist_dual", "mnist_10way", "fashion_10way", "spirals", "parity"]),
     ("RNN",        ["adding", "mnist_rnn"]),
-    ("RL",         ["cartpole", "fourrooms"]),
+    ("RL",         ["cartpole", "fourrooms", "qbert"]),
 ]
 
 TASK_SHORT = {
@@ -235,26 +235,37 @@ def make_figure(all_rows_df, summary_df):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--metric", choices=["cosine", "pearson"], default="cosine")
+    parser.add_argument("--metric", choices=["cosine", "pearson"], default="pearson")
+    parser.add_argument("--task", nargs="+", metavar="TASK",
+                        help="Only recompute these tasks, upserting into the existing CSV.")
     args = parser.parse_args()
 
     out_figures, out_tables = metric_output_dirs(args.metric)
     out_figures.mkdir(parents=True, exist_ok=True)
     out_tables.mkdir(parents=True, exist_ok=True)
 
-    all_rows = []
-    for task in TASK_NAMES:
+    tasks_to_run = args.task if args.task else list(TASK_NAMES)
+    new_rows = []
+    for task in tasks_to_run:
         print(f"  {task} ...", flush=True)
         rows = load_crystallization_data(task, args.metric)
-        all_rows.extend(rows)
+        new_rows.extend(rows)
         n_nets = len({r["run_id"] for r in rows})
         print(f"    {n_nets} networks, {len(rows)} (network × checkpoint) pairs")
 
-    if not all_rows:
+    csv_path = out_tables / "f3_crystallization.csv"
+    new_df = pd.DataFrame(new_rows)
+    if args.task and csv_path.exists():
+        existing = pd.read_csv(csv_path)
+        existing = existing[~existing["task"].isin(args.task)]
+        df = pd.concat([existing, new_df], ignore_index=True)
+    else:
+        df = new_df
+
+    if df.empty:
         print("No data found.")
         return
 
-    df = pd.DataFrame(all_rows)
     summary = summarize_by_level(df)
 
     # Summary stats
@@ -268,7 +279,7 @@ def main():
             print(f"  {task:20s}  never reached (max mean r={n_max:.3f})")
 
     # Save
-    df.to_csv(out_tables / "f3_crystallization.csv", index=False)
+    df.to_csv(csv_path, index=False)
     summary.to_csv(out_tables / "f3_crystallization_summary.csv", index=False)
     print(f"\nSaved tables.")
 

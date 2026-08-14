@@ -34,7 +34,7 @@ sys.path.insert(0, str(ANALYSIS))
 from analysis_utils import (
     CACHE_DIR, DATASET_DIR, FIGURES_DIR, RDM_DIR, TABLES_DIR,
     metric_output_dirs,
-    TASK_NAMES, RL_TASKS, task_meta, get_depth,
+    TASK_NAMES, RL_TASKS, task_meta, get_depth, is_run_successful,
 )
 
 MODELS_DIR         = CACHE_DIR / "category_models"
@@ -67,6 +67,7 @@ PRIMARY_MODEL = {
     "parity":        "parity_label",
     "cartpole":      "euclidean",
     "cifar10":       "class",
+    "qbert":         "level",
 }
 
 MULTI_MODEL["mnist_rnn"] = [
@@ -96,6 +97,7 @@ TASK_LABELS = {
     "parity":        "Parity",
     "cartpole":      "CartPole",
     "fourrooms":     "FourRooms",
+    "qbert":         "Q*bert",
 }
 
 
@@ -110,6 +112,8 @@ def load_thresholds():
     for task, vals in data.items():
         if task != "_alpha" and isinstance(vals, dict):
             result[task] = {"upper": vals.get("upper"), "lower": vals.get("lower")}
+    # Q*bert uses max_frac_level5 as performance axis; threshold is 0.5 by definition.
+    result["qbert"] = {"upper": 0.5, "lower": 0.0}
     return result
 
 
@@ -157,7 +161,13 @@ def load_all_primary_rdms(task, metric="cosine"):
             rg = runs_grp[run_id]
             if bool(rg.attrs.get("is_repeat", False)):
                 continue
-            perf = float(rg.attrs.get("performance", float("nan")))
+            # Q*bert: use max_frac_level5 (0-1 scale) as the performance axis so
+            # that normalized performance plots are comparable to other tasks.
+            # The success threshold for Q*bert is 0.5 (see load_thresholds below).
+            if task == "qbert":
+                perf = float(rg.attrs.get("max_frac_level5", float("nan")))
+            else:
+                perf = float(rg.attrs.get("performance", float("nan")))
             depth = get_depth(rg)
             ckpt_grp = rg.get(ckpt)
             if ckpt_grp is None:
@@ -589,8 +599,10 @@ def plot_mnist_rnn_temporal(thresholds, metric="cosine", out_figures=FIGURES_DIR
 
 def main():
     parser = argparse.ArgumentParser(description="Category structure analysis.")
-    parser.add_argument("--metric", choices=["cosine", "pearson"], default="cosine",
-                        help="RDM metric to use (default: cosine).")
+    parser.add_argument("--metric", choices=["cosine", "pearson"], default="pearson",
+                        help="RDM metric to use (default: pearson).")
+    parser.add_argument("--task", nargs="+", metavar="TASK",
+                        help="Only recompute these tasks, upserting into the existing CSV.")
     args = parser.parse_args()
 
     out_figures, out_tables = metric_output_dirs(args.metric)
@@ -601,9 +613,10 @@ def main():
     meta       = task_meta()
 
     tasks_with_models = [t for t in TASK_NAMES if t in PRIMARY_MODEL or t in MULTI_MODEL]
+    tasks_to_run = [t for t in tasks_with_models if not args.task or t in args.task]
     all_rows = []
 
-    for task in tasks_with_models:
+    for task in tasks_to_run:
         print(f"  {task} ...", end="", flush=True)
 
         # Load category model vectors matched to the network RDM format
@@ -677,11 +690,16 @@ def main():
         n_nets = len(rdm_entries)
         print(f" {n_nets} networks, models={list(cat_vecs.keys())}")
 
-    df = pd.DataFrame(all_rows)
-
-    # Save CSV
+    # Incremental merge when --task given
     csv_path = out_tables / "rdm_category_structure.csv"
-    df.to_csv(csv_path, index=False)
+    new_df = pd.DataFrame(all_rows)
+    if args.task and csv_path.exists():
+        existing = pd.read_csv(csv_path)
+        existing = existing[~existing["task"].isin(args.task)]
+        full_df = pd.concat([existing, new_df], ignore_index=True)
+    else:
+        full_df = new_df
+    full_df.to_csv(csv_path, index=False)
     print(f"\nSaved: {csv_path}")
 
     # Figure — 3×3 grid, one subplot per task (adding absent → one empty cell)
@@ -689,7 +707,7 @@ def main():
     axes = axes.flatten()
 
     for ax, task in zip(axes, tasks_with_models):
-        sub = df[df["task"] == task]
+        sub = full_df[full_df["task"] == task]
         plot_task(ax, task, sub, thresholds, meta[task])
 
     for ax in axes[len(tasks_with_models):]:
@@ -715,12 +733,14 @@ def main():
     plt.close(fig)
     print(f"Saved: {out_path}")
 
-    # Temporal analyses
-    print("\nAdding phase analysis ...")
-    plot_adding_phases(thresholds, metric=args.metric, out_figures=out_figures)
+    # Temporal analyses (only when the relevant task was in scope)
+    if not args.task or "adding" in args.task:
+        print("\nAdding phase analysis ...")
+        plot_adding_phases(thresholds, metric=args.metric, out_figures=out_figures)
 
-    print("\nMNIST RNN temporal analysis ...")
-    plot_mnist_rnn_temporal(thresholds, metric=args.metric, out_figures=out_figures)
+    if not args.task or "mnist_rnn" in args.task:
+        print("\nMNIST RNN temporal analysis ...")
+        plot_mnist_rnn_temporal(thresholds, metric=args.metric, out_figures=out_figures)
 
 
 if __name__ == "__main__":

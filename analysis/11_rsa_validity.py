@@ -35,7 +35,7 @@ ANALYSIS = Path(__file__).parent
 sys.path.insert(0, str(ANALYSIS))
 from analysis_utils import (
     DATASET_DIR, FIGURES_DIR, RDM_DIR, TABLES_DIR, TASK_NAMES, RL_TASKS,
-    metric_output_dirs, get_depth,
+    metric_output_dirs, get_depth, is_run_successful,
 )
 
 TASK_DIR_OVERRIDES = {}
@@ -54,6 +54,7 @@ TASK_LABELS = {
     "mnist_rnn":     "MNIST RNN",
     "cartpole":      "CartPole",
     "fourrooms":     "FourRooms",
+    "qbert":         "Q*bert",
 }
 
 
@@ -129,6 +130,10 @@ def load_task(task, success_threshold=None, metric="cosine"):
     all_rdms = {}
     run_perf = {}
     run_is_repeat = {}
+    run_successful = {}
+    # Thresholds dict for is_run_successful: use success_threshold when given,
+    # -inf when None so that non-Q*bert tasks with no threshold include all networks.
+    _thresh_dict = {task: success_threshold if success_threshold is not None else -float("inf")}
 
     print(f"  loading {task} ...", end="", flush=True)
     with h5py.File(h5_path, "r") as h5:
@@ -151,6 +156,7 @@ def load_task(task, success_threshold=None, metric="cosine"):
             all_rdms[run_id] = rdm
             run_perf[run_id] = float(rg.attrs.get("performance", float("nan")))
             run_is_repeat[run_id] = bool(rg.attrs.get("is_repeat", False))
+            run_successful[run_id] = is_run_successful(task, rg, _thresh_dict)
 
     print(f" {len(all_rdms)} RDMs loaded")
 
@@ -169,9 +175,12 @@ def load_task(task, success_threshold=None, metric="cosine"):
     all_primary = {rid: rdm for rid, rdm in all_rdms.items()
                    if not run_is_repeat.get(rid, False)}
 
-    if success_threshold is not None:
+    # Filter to successful/functional networks for noise ceiling.
+    # is_run_successful handles both score threshold (other tasks) and
+    # is_functional attribute (Q*bert).
+    if success_threshold is not None or task in {"qbert"}:
         primary_rdms = {rid: rdm for rid, rdm in all_primary.items()
-                        if run_perf.get(rid, float("nan")) >= success_threshold}
+                        if run_successful.get(rid, False)}
     else:
         primary_rdms = dict(all_primary)
 
@@ -183,10 +192,8 @@ def load_task(task, success_threshold=None, metric="cosine"):
         rep_id  = f"run_{rep_iter:04d}_r0"
         if orig_id not in all_rdms or rep_id not in all_rdms:
             continue
-        if success_threshold is not None:
-            if (run_perf.get(orig_id, float("nan")) < success_threshold or
-                    run_perf.get(rep_id,  float("nan")) < success_threshold):
-                continue
+        if not (run_successful.get(orig_id, False) and run_successful.get(rep_id, False)):
+            continue
         within_pairs.append((all_rdms[orig_id], all_rdms[rep_id]))
 
     return primary_rdms, all_primary, within_pairs, run_perf
@@ -352,8 +359,8 @@ def main():
     parser = argparse.ArgumentParser(description="RSA validity — noise ceiling and variance decomposition.")
     parser.add_argument("--task", nargs="+", default=None,
                         help="Tasks to process (default: all).")
-    parser.add_argument("--metric", choices=["cosine", "pearson"], default="cosine",
-                        help="RDM metric to use (default: cosine).")
+    parser.add_argument("--metric", choices=["cosine", "pearson"], default="pearson",
+                        help="RDM metric to use (default: pearson).")
     args = parser.parse_args()
 
     out_figures, out_tables = metric_output_dirs(args.metric)
@@ -424,25 +431,51 @@ def main():
         for r in between_corrs:
             var_rows.append({"task": task, "pair_type": "between_config", "spearman_r": float(r)})
 
-    # --- Save tables ---
+    # --- Save tables (incremental merge when --task is given) ---
+    def _merge_csv(csv_path, new_rows, update_tasks):
+        new_df = pd.DataFrame(new_rows)
+        if update_tasks and csv_path.exists():
+            existing = pd.read_csv(csv_path)
+            existing = existing[~existing["task"].isin(update_tasks)]
+            return pd.concat([existing, new_df], ignore_index=True)
+        return new_df
+
     nc_csv = out_tables / "rdm_noise_ceiling.csv"
-    pd.DataFrame(nc_rows).to_csv(nc_csv, index=False)
+    full_nc_df = _merge_csv(nc_csv, nc_rows, args.task)
+    full_nc_df.to_csv(nc_csv, index=False)
     print(f"\nSaved: {nc_csv}")
 
     var_csv = out_tables / "rdm_variance.csv"
-    pd.DataFrame(var_rows).to_csv(var_csv, index=False)
+    full_var_df = _merge_csv(var_csv, var_rows, args.task)
+    full_var_df.to_csv(var_csv, index=False)
     print(f"Saved: {var_csv}")
 
+    # Rebuild full nc_results / var_results from merged CSVs for figure
+    all_nc_results = {}
+    for t in TASK_NAMES:
+        vals = full_nc_df[full_nc_df["task"] == t]["loo_spearman_r"].dropna().values
+        if len(vals) > 0:
+            all_nc_results[t] = vals
+
+    all_var_results = {}
+    for t in TASK_NAMES:
+        sub = full_var_df[full_var_df["task"] == t]
+        if len(sub) == 0:
+            continue
+        within  = sub[sub["pair_type"] == "within_config"]["spearman_r"].values
+        between = sub[sub["pair_type"] == "between_config"]["spearman_r"].values
+        all_var_results[t] = {"within": within, "between": between}
+
     # --- Save figures ---
-    if nc_results:
-        fig_nc = plot_noise_ceiling(nc_results, thresholds)
+    if all_nc_results:
+        fig_nc = plot_noise_ceiling(all_nc_results, thresholds)
         out_nc = out_figures / "f1_noise_ceiling.pdf"
         fig_nc.savefig(out_nc, bbox_inches="tight")
         plt.close(fig_nc)
         print(f"Saved: {out_nc}")
 
-    if var_results:
-        fig_var = plot_variance_decomp(var_results)
+    if all_var_results:
+        fig_var = plot_variance_decomp(all_var_results)
         out_var = out_figures / "f1_variance_decomposition.pdf"
         fig_var.savefig(out_var, bbox_inches="tight")
         plt.close(fig_var)

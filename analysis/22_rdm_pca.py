@@ -47,6 +47,7 @@ TASK_SHORT = {
     "mnist_rnn":     "MNIST RNN",
     "cartpole":      "CartPole",
     "fourrooms":     "FourRooms",
+    "qbert":         "Q*bert",
 }
 
 # (column_name, log_scale)
@@ -68,6 +69,7 @@ CONT_LABELS = {
 CAT_HPS_SUPERVISED = ["hp_optimizer", "hp_activation", "hp_depth", "hp_init_scale"]
 CAT_HPS_RNN        = ["hp_optimizer", "hp_cell_type",  "hp_n_rnn_layers", "hp_init_scale"]
 CAT_HPS_RL         = ["hp_optimizer", "hp_activation", "hp_depth", "hp_init_scale"]
+CAT_HPS_QBERT      = ["hp_use_attention", "hp_use_residual", "hp_depth"]
 # CIFAR: activation relu/tanh, use_batchnorm (bool→int 0/1), depth 1/2/3
 CAT_HPS_CIFAR      = ["hp_activation", "hp_use_batchnorm", "hp_depth"]
 
@@ -78,7 +80,9 @@ CAT_LABELS = {
     "hp_init_scale":   "init scale",
     "hp_cell_type":    "cell type",
     "hp_n_rnn_layers": "n rnn layers",
-    "hp_use_batchnorm": "use batchnorm",
+    "hp_use_batchnorm":  "use batchnorm",
+    "hp_use_attention":  "use attention",
+    "hp_use_residual":   "use residual",
 }
 
 # String keys — handles int/float CSV round-trips via _val_to_str()
@@ -89,7 +93,9 @@ CAT_COLORS = {
     "hp_init_scale":   {"0.1": "#2271b2", "1.0": "#e05c00"},
     "hp_cell_type":    {"gru": "#2271b2", "rnn": "#e05c00"},
     "hp_n_rnn_layers": {"1": "#2271b2", "2": "#e05c00"},
-    "hp_use_batchnorm": {"0": "#2271b2", "1": "#e05c00"},
+    "hp_use_batchnorm":  {"0": "#2271b2", "1": "#e05c00"},
+    "hp_use_attention":  {"0": "#2271b2", "1": "#e05c00"},
+    "hp_use_residual":   {"0": "#2271b2", "1": "#e05c00"},
 }
 
 
@@ -193,6 +199,8 @@ def run_pca(vectors, n_components=N_COMPONENTS):
 # ---------------------------------------------------------------------------
 
 def _cat_hps_for_task(task):
+    if task == "qbert":
+        return CAT_HPS_QBERT
     if task == "cifar10":
         return CAT_HPS_CIFAR
     if task in RNN_TASKS:
@@ -330,8 +338,10 @@ def make_task_page(pca, coords, hp_df, task):
 
 def main():
     parser = argparse.ArgumentParser(description="PCA on network RDMs.")
-    parser.add_argument("--metric", choices=["cosine", "pearson"], default="cosine",
-                        help="RDM metric (default: cosine).")
+    parser.add_argument("--metric", choices=["cosine", "pearson"], default="pearson",
+                        help="RDM metric (default: pearson).")
+    parser.add_argument("--task", nargs="+", metavar="TASK",
+                        help="Only generate PCA pages for these tasks.")
     args = parser.parse_args()
 
     out_figures, out_tables = metric_output_dirs(args.metric)
@@ -346,11 +356,14 @@ def main():
     print("Loading per-network stats ...")
     all_df = pd.read_csv(stats_path)
 
+    tasks_to_run = set(args.task) if args.task else set(TASK_NAMES)
     all_coord_rows = []
 
     pdf_path = out_figures / "f2_rdm_pca.pdf"
     with PdfPages(pdf_path) as pdf:
         for task in TASK_NAMES:
+            if task not in tasks_to_run:
+                continue
             task_df = all_df[all_df["task"] == task].copy()
             if len(task_df) < 10:
                 print(f"  [skip] {task}: only {len(task_df)} networks in stats CSV")

@@ -33,7 +33,7 @@ from scipy.stats import spearmanr
 
 ANALYSIS = Path(__file__).parent
 sys.path.insert(0, str(ANALYSIS))
-from analysis_utils import FIGURES_DIR, RDM_DIR, TABLES_DIR, TASK_NAMES, RL_TASKS, metric_output_dirs, get_depth
+from analysis_utils import FIGURES_DIR, RDM_DIR, TABLES_DIR, TASK_NAMES, RL_TASKS, metric_output_dirs, get_depth, is_run_successful
 
 TASK_DIR_OVERRIDES = {}
 RNN_TASKS          = {"adding", "mnist_rnn"}
@@ -50,6 +50,7 @@ PRIMARY_MODEL = {
     "mnist_rnn":     "digit",
     "cartpole":      "euclidean",
     "fourrooms":     "euclidean",
+    "qbert":         "level",
 }
 
 # Continuous HPs per paradigm
@@ -89,6 +90,11 @@ CAT_HPS_CIFAR = [
     ("hp_activation",    "relu", "tanh"),
     ("hp_use_batchnorm", "0",    "1"),
 ]
+CAT_HPS_QBERT = [
+    ("hp_use_attention", "0", "1"),
+    ("hp_use_residual",  "0", "1"),
+    ("hp_depth",         "1", "2"),
+]
 CAT_LABELS = {
     "hp_optimizer":                  "optimizer\n(sgd→adam)",
     "hp_activation:relu/sigmoid":    "activation\n(relu→sig)",
@@ -100,6 +106,8 @@ CAT_LABELS = {
     "hp_cell_type":                  "cell_type\n(gru→rnn)",
     "hp_n_rnn_layers":               "n_rnn_layers\n(1→2)",
     "hp_use_batchnorm":              "use_batchnorm\n(F→T)",
+    "hp_use_attention":              "use_attention\n(F→T)",
+    "hp_use_residual":               "use_residual\n(F→T)",
 }
 
 RDM_PROPS    = ["reliability", "category_corr", "dimensionality", "mean_dissimilarity"]
@@ -114,7 +122,7 @@ RDM_LABELS   = {
 PARADIGMS = [
     ("Supervised",  ["mnist_dual", "mnist_10way", "fashion_10way", "spirals", "parity"]),
     ("RNN",         ["adding", "mnist_rnn"]),
-    ("RL",          ["cartpole", "fourrooms"]),
+    ("RL",          ["cartpole", "fourrooms", "qbert"]),
     ("CIFAR",       ["cifar10"]),
 ]
 
@@ -128,6 +136,7 @@ TASK_SHORT = {
     "mnist_rnn":     "MNIST\nRNN",
     "cartpole":      "CartPole",
     "fourrooms":     "FourRooms",
+    "qbert":         "Q*bert",
     "cifar10":       "CIFAR-10",
 }
 
@@ -216,7 +225,8 @@ def load_per_network_stats(thresholds, metric="cosine", tasks=None):
                 if bool(rg.attrs.get("is_repeat", False)):
                     continue
                 perf = float(rg.attrs.get("performance", float("nan")))
-                if th is not None and perf < th:
+                _thresh_dict = {task: th} if th is not None else {}
+                if not is_run_successful(task, rg, _thresh_dict):
                     continue
 
                 depth = get_depth(rg)
@@ -325,11 +335,13 @@ def compute_effects(df, task):
     is_rnn   = task in RNN_TASKS
     is_rl    = task in RL_TASKS
     is_cifar = task == "cifar10"
+    is_qbert = task == "qbert"
     rows     = []
 
     cont_hps = CONT_HPS_CIFAR if is_cifar else CONT_HPS
-    cat_hps  = (CAT_HPS_CIFAR  if is_cifar else
-                CAT_HPS_RNN    if is_rnn   else
+    cat_hps  = (CAT_HPS_QBERT     if is_qbert else
+                CAT_HPS_CIFAR     if is_cifar  else
+                CAT_HPS_RNN       if is_rnn    else
                 CAT_HPS_SUPERVISED)
 
     for prop in RDM_PROPS:
@@ -368,9 +380,11 @@ def compute_effects(df, task):
 def hp_row_order(task):
     is_rnn   = task in RNN_TASKS
     is_cifar = task == "cifar10"
+    is_qbert = task == "qbert"
     cont_hps = CONT_HPS_CIFAR if is_cifar else CONT_HPS
-    cat_hps  = (CAT_HPS_CIFAR  if is_cifar else
-                CAT_HPS_RNN    if is_rnn   else
+    cat_hps  = (CAT_HPS_QBERT     if is_qbert else
+                CAT_HPS_CIFAR     if is_cifar  else
+                CAT_HPS_RNN       if is_rnn    else
                 CAT_HPS_SUPERVISED)
     cont = [h for h in cont_hps if not (h == "hp_batch_size" and task in RL_TASKS)]
     cat  = [_hp_key(h, la, lb, cat_hps) for h, la, lb in cat_hps]
@@ -528,9 +542,9 @@ def make_figure(effects_df, task_dfs):
 
 def main():
     parser = argparse.ArgumentParser(description="HP effects on RDM properties.")
-    parser.add_argument("--metric", choices=["cosine", "pearson"], default="cosine",
-                        help="RDM metric to use (default: cosine).")
-    parser.add_argument("--tasks", nargs="+", default=None,
+    parser.add_argument("--metric", choices=["cosine", "pearson"], default="pearson",
+                        help="RDM metric to use (default: pearson).")
+    parser.add_argument("--task", nargs="+", default=None,
                         help="Only recompute these tasks, upserting into existing CSVs.")
     args = parser.parse_args()
 
@@ -539,7 +553,7 @@ def main():
     out_tables.mkdir(parents=True, exist_ok=True)
 
     thresholds = load_thresholds()
-    update_tasks = args.tasks  # None → full recompute
+    update_tasks = args.task  # None → full recompute
 
     print("Loading per-network stats ...")
     new_task_dfs = load_per_network_stats(thresholds, metric=args.metric,
