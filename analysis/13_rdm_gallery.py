@@ -24,8 +24,8 @@ import numpy as np
 ANALYSIS = Path(__file__).parent
 sys.path.insert(0, str(ANALYSIS))
 from analysis_utils import (
-    CACHE_DIR, FIGURES_DIR, RDM_DIR, TABLES_DIR, TASK_NAMES, RL_TASKS,
-    metric_output_dirs, get_depth,
+    CACHE_DIR, FIGURES_DIR, FINAL_DIR, RDM_DIR, TABLES_DIR, TASK_NAMES, RL_TASKS,
+    metric_output_dirs, metric_suffix, get_depth,
 )
 from plot_utils import plot_rdm, vec_to_rdm
 
@@ -289,6 +289,10 @@ def main():
         fig = make_gallery(task, rdm_entries, sort_idx, line_vals, display_label, metric=args.metric)
         out_path = out_figures / f"rdm_gallery_{task}.pdf"
         fig.savefig(out_path, bbox_inches="tight")
+        suf = metric_suffix(args.metric)
+        final_dir = FINAL_DIR / "representational_geometry/figures/rdm_gallery"
+        final_dir.mkdir(parents=True, exist_ok=True)
+        fig.savefig(final_dir / f"rdm_gallery_{task}{suf}.png", dpi=200, bbox_inches="tight")
         plt.close(fig)
         print(f" → {out_path.name}")
 

@@ -36,7 +36,7 @@ import pandas as pd
 ANALYSIS = Path(__file__).parent
 sys.path.insert(0, str(ANALYSIS))
 from analysis_utils import (
-    FIGURES_DIR,
+    FIGURES_DIR, FINAL_DIR,
     PRODUCTION_DIR,
     TABLES_DIR,
     TASK_NAMES,
@@ -124,10 +124,8 @@ def main():
                    label="chance")
 
         for alpha, color in zip(ALPHAS, COLORS):
-            upper = chance + alpha       * (emp_max - chance)
-            lower = chance + (1 - alpha) * (emp_max - chance)
-            ax.axhline(upper, color=color, lw=1.1, ls="-",  zorder=2)
-            ax.axhline(lower, color=color, lw=1.1, ls="--", zorder=2,
+            upper = chance + alpha * (emp_max - chance)
+            ax.axhline(upper, color=color, lw=1.1, ls="--", zorder=2,
                        label=f"α={alpha}")
 
         ax.set_title(display.get(task, task), fontsize=10, fontweight="bold")
@@ -153,6 +151,9 @@ def main():
 
     out = FIGURES_DIR / "performance_lorenz.pdf"
     fig.savefig(out, bbox_inches="tight")
+    final_dir = FINAL_DIR / "hp_coverage/figures/performance"
+    final_dir.mkdir(parents=True, exist_ok=True)
+    fig.savefig(final_dir / "performance_lorenz.png", dpi=200, bbox_inches="tight")
     print(f"\nSaved: {out}")
 
     # Print per-task threshold values for each alpha (raw performance)

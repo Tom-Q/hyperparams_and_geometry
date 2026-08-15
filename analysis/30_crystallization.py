@@ -26,8 +26,8 @@ from scipy.stats import spearmanr
 ANALYSIS = Path(__file__).parent
 sys.path.insert(0, str(ANALYSIS))
 from analysis_utils import (
-    FIGURES_DIR, RDM_DIR, TABLES_DIR, TASK_NAMES, RL_TASKS,
-    metric_output_dirs, get_depth,
+    FIGURES_DIR, FINAL_DIR, RDM_DIR, TABLES_DIR, TASK_NAMES, RL_TASKS,
+    metric_output_dirs, metric_suffix, get_depth,
 )
 
 RNN_TASKS = {"adding", "mnist_rnn"}
@@ -152,6 +152,54 @@ def crystallization_threshold(summary, task, threshold=0.9):
     sub = summary[summary["task"] == task].sort_values("perf_level")
     above = sub[sub["mean"] >= threshold]
     return float(above["perf_level"].iloc[0]) if len(above) else None
+
+
+def _draw_crystallization_ax(ax, task, all_rows_df, summary_df, color,
+                              paradigm_label=None):
+    task_sum = summary_df[summary_df["task"] == task].sort_values("perf_level")
+    task_raw = all_rows_df[all_rows_df["task"] == task]
+
+    if task_sum.empty:
+        ax.set_visible(False)
+        return
+
+    for run_id, grp in task_raw.groupby("run_id"):
+        grp = grp.sort_values("perf_level")
+        ax.plot(grp["perf_level"], grp["spearman_r"],
+                color=color, alpha=0.05, linewidth=0.5)
+
+    ax.fill_between(
+        task_sum["perf_level"],
+        task_sum["mean"] - task_sum["ci95"],
+        task_sum["mean"] + task_sum["ci95"],
+        color=color, alpha=0.25,
+    )
+    ax.plot(task_sum["perf_level"], task_sum["mean"],
+            color=color, linewidth=2.0, zorder=3)
+
+    ax.axhline(0.9, color="grey", linestyle="--", linewidth=0.8, alpha=0.7)
+
+    thr = crystallization_threshold(summary_df, task)
+    if thr is not None:
+        ax.axvline(thr, color="grey", linestyle=":", linewidth=0.8, alpha=0.7)
+        ax.text(thr + 0.01, 0.05, f"≥0.9\n@{thr:.2f}",
+                fontsize=6, color="grey", va="bottom")
+
+    ax.set_xlim(0, 1.0)
+    ax.set_ylim(-0.1, 1.05)
+    ax.set_xticks([0, 0.2, 0.4, 0.6, 0.8, 1.0])
+    ax.set_xticklabels(["0", ".2", ".4", ".6", ".8", "1"], fontsize=7)
+    ax.set_yticks([0, 0.25, 0.5, 0.75, 1.0])
+    ax.set_yticklabels(["0", ".25", ".5", ".75", "1"], fontsize=7)
+    title = TASK_SHORT.get(task, task)
+    if paradigm_label:
+        title = f"{title}\n({paradigm_label})"
+    ax.set_title(title, fontsize=8, fontweight="bold")
+    ax.set_ylabel("Spearman r", fontsize=7)
+    ax.set_xlabel("Normalised performance", fontsize=7)
+    n_networks = task_raw["run_id"].nunique()
+    ax.text(0.02, 0.97, f"n={n_networks}", transform=ax.transAxes,
+            fontsize=6, va="top", color="grey")
 
 
 def make_figure(all_rows_df, summary_df):
@@ -288,6 +336,26 @@ def main():
     fig.savefig(out_path, bbox_inches="tight", dpi=150)
     plt.close(fig)
     print(f"Saved: {out_path}")
+
+    # Per-task PNGs
+    suf = metric_suffix(args.metric)
+    crys_final = FINAL_DIR / "learning_dynamics/figures/crystallization"
+    crys_final.mkdir(parents=True, exist_ok=True)
+    task_color = {task: PARADIGM_COLOR[p]
+                  for p, tasks in PARADIGMS for task in tasks}
+    n_saved = 0
+    for task in TASK_NAMES:
+        if task not in df["task"].values:
+            continue
+        color = task_color.get(task, "#888888")
+        paradigm_label = next((p for p, tasks in PARADIGMS if task in tasks), None)
+        fig_t, ax_t = plt.subplots(figsize=(4, 3.5))
+        _draw_crystallization_ax(ax_t, task, df, summary, color, paradigm_label)
+        fig_t.tight_layout()
+        fig_t.savefig(crys_final / f"crystallization_{task}{suf}.png", dpi=200, bbox_inches="tight")
+        plt.close(fig_t)
+        n_saved += 1
+    print(f"Saved: {n_saved} per-task PNGs → {crys_final}")
 
 
 if __name__ == "__main__":

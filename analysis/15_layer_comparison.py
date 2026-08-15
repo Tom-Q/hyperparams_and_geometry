@@ -23,6 +23,7 @@ Outputs:
     output/analysis/tables/rdm_layer_comparison.csv
 """
 
+import argparse
 import json
 import sys
 from pathlib import Path
@@ -38,7 +39,7 @@ from scipy.stats import spearmanr
 ANALYSIS = Path(__file__).parent
 sys.path.insert(0, str(ANALYSIS))
 from analysis_utils import (
-    CACHE_DIR, FIGURES_DIR, RDM_DIR, TABLES_DIR, TASK_NAMES, RL_TASKS, task_meta, get_depth,
+    CACHE_DIR, FIGURES_DIR, FINAL_DIR, RDM_DIR, TABLES_DIR, TASK_NAMES, RL_TASKS, task_meta, get_depth,
 )
 
 MODELS_DIR = CACHE_DIR / "category_models"
@@ -118,7 +119,7 @@ def noise_ceiling_loo(rdm_matrix):
 # Data loading
 # ---------------------------------------------------------------------------
 
-def load_depth2_pairs(task, threshold):
+def load_depth2_pairs(task, threshold, metric="pearson"):
     """
     Load primary depth=2 networks with both layer_0 and layer_1 RDMs.
     Returns list of dicts with run_id, perf, l0_vec, l1_vec.
@@ -139,8 +140,8 @@ def load_depth2_pairs(task, threshold):
             ckpt_grp = rg.get(ckpt)
             if ckpt_grp is None:
                 continue
-            ds0 = ckpt_grp.get("layer_0_cosine")
-            ds1 = ckpt_grp.get("layer_1_cosine")
+            ds0 = ckpt_grp.get(f"layer_0_{metric}")
+            ds1 = ckpt_grp.get(f"layer_1_{metric}")
             if ds0 is None or ds1 is None:
                 continue
             if (ds0.attrs.get("degenerate", False) or len(ds0) == 0 or
@@ -172,7 +173,7 @@ def load_cat_vecs(task):
     return cat_vecs
 
 
-def load_networks_by_depth(task, threshold):
+def load_networks_by_depth(task, threshold, metric="pearson"):
     """Load all primary networks grouped by depth. Returns {depth: [net_dicts]}."""
     h5_path = RDM_DIR / f"{task}_rdms.h5"
     if not h5_path.exists():
@@ -194,7 +195,7 @@ def load_networks_by_depth(task, threshold):
             layers = {}
             ok = True
             for li in range(depth):
-                ds = ckpt_grp.get(f"layer_{li}_cosine")
+                ds = ckpt_grp.get(f"layer_{li}_{metric}")
                 if ds is None or ds.attrs.get("degenerate", False) or len(ds) == 0:
                     ok = False
                     break
@@ -596,6 +597,11 @@ def make_cifar_figure(cifar_by_depth):
 # ---------------------------------------------------------------------------
 
 def main():
+    parser = argparse.ArgumentParser(description="Layer comparison.")
+    parser.add_argument("--metric", choices=["cosine", "pearson"], default="pearson")
+    args = parser.parse_args()
+    metric = args.metric
+
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
     TABLES_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -610,7 +616,7 @@ def main():
         threshold = thresholds.get(task)
         print(f"  {task} ...", end="", flush=True)
 
-        pairs = load_depth2_pairs(task, threshold)
+        pairs = load_depth2_pairs(task, threshold, metric=metric)
         if not pairs:
             print(" [no depth=2 networks]")
             continue
@@ -636,7 +642,7 @@ def main():
     # CIFAR-10: separate analysis across all depth levels
     print("\nCIFAR-10 (all depths) ...", flush=True)
     cifar_threshold = thresholds.get("cifar10")
-    cifar_by_depth_raw = load_networks_by_depth("cifar10", cifar_threshold)
+    cifar_by_depth_raw = load_networks_by_depth("cifar10", cifar_threshold, metric=metric)
     cifar_cat_vecs = load_cat_vecs("cifar10")
     cifar_ordered  = [m for m in TASK_MODELS_ORDERED.get("cifar10", []) if m in cifar_cat_vecs]
     cifar_by_depth = {}
@@ -657,10 +663,14 @@ def main():
     pd.DataFrame(all_rows).to_csv(csv_path, index=False)
     print(f"\nSaved: {csv_path}")
 
+    lc_final = FINAL_DIR / "representational_geometry/figures/layer_comparison"
+    lc_final.mkdir(parents=True, exist_ok=True)
+
     # Focal figure
     fig_focal = make_focal_figure(results_by_task)
     out_focal = FIGURES_DIR / "f1_layer_comparison.pdf"
     fig_focal.savefig(out_focal, bbox_inches="tight", dpi=150)
+    fig_focal.savefig(lc_final / "layer_comparison_focal.png", dpi=200, bbox_inches="tight")
     plt.close(fig_focal)
     print(f"Saved: {out_focal}")
 
@@ -669,6 +679,7 @@ def main():
     if fig_sum is not None:
         out_sum = FIGURES_DIR / "f1_layer_comparison_summary.pdf"
         fig_sum.savefig(out_sum, bbox_inches="tight", dpi=150)
+        fig_sum.savefig(lc_final / "layer_comparison_summary.png", dpi=200, bbox_inches="tight")
         plt.close(fig_sum)
         print(f"Saved: {out_sum}")
 
@@ -677,6 +688,7 @@ def main():
         fig_cifar = make_cifar_figure(cifar_by_depth)
         out_cifar = FIGURES_DIR / "f1_layer_comparison_cifar10.pdf"
         fig_cifar.savefig(out_cifar, bbox_inches="tight", dpi=150)
+        fig_cifar.savefig(lc_final / "layer_comparison_cifar10.png", dpi=200, bbox_inches="tight")
         plt.close(fig_cifar)
         print(f"Saved: {out_cifar}")
 

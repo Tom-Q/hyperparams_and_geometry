@@ -37,7 +37,7 @@ from scipy.stats import spearmanr
 
 ANALYSIS = Path(__file__).parent
 sys.path.insert(0, str(ANALYSIS))
-from analysis_utils import TABLES_DIR, TASK_NAMES, RL_TASKS, metric_output_dirs
+from analysis_utils import TABLES_DIR, FINAL_DIR, TASK_NAMES, RL_TASKS, metric_output_dirs, metric_suffix
 
 RNN_TASKS = {"adding", "mnist_rnn"}
 
@@ -320,11 +320,11 @@ def make_heatmap_figure(results_df):
 
     fig.suptitle("Latent variable composites × RDM properties (Spearman r, successful networks)",
                  fontsize=10)
-    fig.tight_layout(rect=[0, 0, 0.92, 0.97])
+    fig.tight_layout(rect=[0, 0, 0.87, 0.97])
     return fig
 
 
-def make_scatter_pages(enriched_dfs, out_path):
+def make_scatter_pages(enriched_dfs, out_path, final_dir=None, metric_suf=""):
     """
     Multi-page PDF: one page per task.
     Each page: 3 composites (rows) × 4 RDM properties (cols).
@@ -362,10 +362,13 @@ def make_scatter_pages(enriched_dfs, out_path):
                         ax.set_title(f"r={rval:+.2f}, {p_str}, N={n}", fontsize=7)
 
                     ax.set_xlabel(COMPOSITE_LABELS[comp], fontsize=7)
-                    ax.set_ylabel(RDM_LABELS[prop], fontsize=7)
+                    ax.set_ylabel(RDM_LABELS[prop].replace("\n", " "), fontsize=7)
                     ax.tick_params(labelsize=6)
 
             pdf.savefig(fig, bbox_inches="tight")
+            if final_dir is not None:
+                fig.savefig(final_dir / f"latent_vars_scatter_{task}{metric_suf}.png",
+                            dpi=200, bbox_inches="tight")
             plt.close(fig)
 
 
@@ -412,14 +415,19 @@ def main():
         print(f"  {row['task']:15s} {row['composite']:15s} → {row['rdm_prop']:20s}"
               f"  r={row['spearman_r']:+.3f}  p={row['p_value']:.3f}  N={row['N']}")
 
+    suf = metric_suffix(args.metric)
+    lv_final = FINAL_DIR / "hp_effects/figures/latent_vars"
+    lv_final.mkdir(parents=True, exist_ok=True)
+
     fig = make_heatmap_figure(results_df)
     heatmap_path = out_figures / "f2_latent_vars.pdf"
     fig.savefig(heatmap_path, bbox_inches="tight", dpi=150)
+    fig.savefig(lv_final / f"latent_vars_heatmap{suf}.png", dpi=200, bbox_inches="tight")
     plt.close(fig)
     print(f"\nSaved: {heatmap_path.name}")
 
     scatter_path = out_figures / "f2_latent_vars_scatter.pdf"
-    make_scatter_pages(enriched_dfs, scatter_path)
+    make_scatter_pages(enriched_dfs, scatter_path, final_dir=lv_final, metric_suf=suf)
     print(f"Saved: {scatter_path.name}")
 
 

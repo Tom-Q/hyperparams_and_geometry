@@ -33,7 +33,7 @@ from scipy.stats import rankdata, spearmanr
 ANALYSIS = Path(__file__).parent
 sys.path.insert(0, str(ANALYSIS))
 from analysis_utils import (
-    DATASET_DIR, FIGURES_DIR, RDM_DIR, TABLES_DIR, metric_output_dirs,
+    DATASET_DIR, FIGURES_DIR, FINAL_DIR, RDM_DIR, TABLES_DIR, metric_output_dirs, metric_suffix,
 )
 
 TASK_DIR_OVERRIDES = {}
@@ -278,7 +278,7 @@ def run_adding_phases(rng, metric="cosine"):
         with h5py.File(h5_path, "r") as h5:
             sample_run = sorted(h5.get("runs", {}).keys())[0]
             ckpt       = h5["runs"][sample_run].get("best")
-            has_phases = ckpt is not None and "layer_0_phase_1_cosine" in ckpt
+            has_phases = ckpt is not None and f"layer_0_phase_1_{metric}" in ckpt
     except BlockingIOError:
         print("  [skip adding] adding_rdms.h5 is locked (10b still running?)")
         return {}, [], []
@@ -512,6 +512,10 @@ def main():
         fig = plot_temporal_figure(rnn_results, adding_results, n_layers, n_t)
         out = out_figures / "f1_noise_ceiling_temporal.pdf"
         fig.savefig(out, bbox_inches="tight")
+        suf = metric_suffix(args.metric)
+        final_dir = FINAL_DIR / "reliability/figures/noise_ceiling_temporal"
+        final_dir.mkdir(parents=True, exist_ok=True)
+        fig.savefig(final_dir / f"noise_ceiling_temporal{suf}.png", dpi=200, bbox_inches="tight")
         plt.close(fig)
         print(f"Saved: {out}")
 

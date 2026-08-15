@@ -34,8 +34,8 @@ from scipy.stats import rankdata, spearmanr
 ANALYSIS = Path(__file__).parent
 sys.path.insert(0, str(ANALYSIS))
 from analysis_utils import (
-    DATASET_DIR, FIGURES_DIR, RDM_DIR, TABLES_DIR, TASK_NAMES, RL_TASKS,
-    metric_output_dirs, get_depth, is_run_successful,
+    DATASET_DIR, FIGURES_DIR, FINAL_DIR, RDM_DIR, TABLES_DIR, TASK_NAMES, RL_TASKS,
+    metric_output_dirs, metric_suffix, get_depth, is_run_successful,
 )
 
 TASK_DIR_OVERRIDES = {}
@@ -260,6 +260,26 @@ def between_config_corrs(all_primary, n_pairs, rng):
 # Figures
 # ---------------------------------------------------------------------------
 
+def _draw_nc_ax(ax, task, corrs, thresholds):
+    vp = ax.violinplot([corrs], positions=[0], showmedians=True, showextrema=True)
+    vp["bodies"][0].set_facecolor("#4393c3")
+    vp["bodies"][0].set_alpha(0.6)
+    mean_r = np.mean(corrs)
+    ax.scatter([0], [mean_r], color="#d6604d", s=40, zorder=5)
+    ax.axhline(0, color="grey", lw=0.7, ls="--")
+    ax.set_xlim(-0.6, 0.6)
+    ax.set_ylim(-0.15, 1.08)
+    ax.set_xticks([])
+    thresh = thresholds.get(task)
+    thresh_str = f"perf ≥ {thresh:.3f}" if thresh is not None else "all primary"
+    ax.set_title(f"{TASK_LABELS.get(task, task)}\nn={len(corrs)}, {thresh_str}",
+                 fontsize=9)
+    ax.set_ylabel("LOO Spearman r", fontsize=8)
+    ax.tick_params(labelsize=7)
+    ax.text(0.02, 0.97, f"mean={mean_r:.3f}", transform=ax.transAxes,
+            fontsize=8, va="top", color="#d6604d")
+
+
 def plot_noise_ceiling(nc_results, thresholds):
     tasks = [t for t in TASK_NAMES if t in nc_results]
     ncols, nrows = 3, 3
@@ -267,24 +287,7 @@ def plot_noise_ceiling(nc_results, thresholds):
     axes = axes.flatten()
 
     for ax, task in zip(axes, tasks):
-        corrs = nc_results[task]
-        vp = ax.violinplot([corrs], positions=[0], showmedians=True, showextrema=True)
-        vp["bodies"][0].set_facecolor("#4393c3")
-        vp["bodies"][0].set_alpha(0.6)
-        mean_r = np.mean(corrs)
-        ax.scatter([0], [mean_r], color="#d6604d", s=40, zorder=5)
-        ax.axhline(0, color="grey", lw=0.7, ls="--")
-        ax.set_xlim(-0.6, 0.6)
-        ax.set_ylim(-0.15, 1.08)
-        ax.set_xticks([])
-        thresh = thresholds.get(task)
-        thresh_str = f"perf ≥ {thresh:.3f}" if thresh is not None else "all primary"
-        ax.set_title(f"{TASK_LABELS.get(task, task)}\nn={len(corrs)}, {thresh_str}",
-                     fontsize=9)
-        ax.set_ylabel("LOO Spearman r", fontsize=8)
-        ax.tick_params(labelsize=7)
-        ax.text(0.02, 0.97, f"mean={mean_r:.3f}", transform=ax.transAxes,
-                fontsize=8, va="top", color="#d6604d")
+        _draw_nc_ax(ax, task, nc_results[task], thresholds)
 
     for ax in axes[len(tasks):]:
         ax.set_visible(False)
@@ -297,6 +300,43 @@ def plot_noise_ceiling(nc_results, thresholds):
     return fig
 
 
+def _draw_var_ax(ax, task, r):
+    within = r["within"]
+    between = r["between"]
+
+    if len(within) == 0 and len(between) == 0:
+        ax.text(0.5, 0.5, "no data", ha="center", va="center",
+                transform=ax.transAxes, fontsize=9)
+        ax.set_title(TASK_LABELS.get(task, task), fontsize=9)
+        return
+
+    data = [d for d in [within, between] if len(d) > 0]
+    pos = [i for i, d in enumerate([within, between]) if len(d) > 0]
+
+    parts = ax.violinplot(data, positions=pos, showmedians=True, showextrema=True)
+    colors = ["#2166ac", "#d6604d"]
+    for body, color in zip(parts["bodies"], [colors[p] for p in pos]):
+        body.set_facecolor(color)
+        body.set_alpha(0.6)
+
+    ax.set_xticks([0, 1])
+    ax.set_xticklabels(
+        ["within-config\n(stochastic)", "between-config\n(HP-driven)"],
+        fontsize=7)
+    ax.set_ylim(-0.25, 1.1)
+    ax.set_ylabel("Spearman r", fontsize=8)
+    ax.tick_params(labelsize=7)
+    ax.axhline(0, color="grey", lw=0.7, ls="--")
+
+    med_w = np.median(within) if len(within) > 0 else float("nan")
+    med_b = np.median(between) if len(between) > 0 else float("nan")
+    gap = med_b - med_w
+    ax.set_title(
+        f"{TASK_LABELS.get(task, task)}\n"
+        f"within={med_w:.3f}  between={med_b:.3f}  Δ={gap:+.3f}",
+        fontsize=8.5)
+
+
 def plot_variance_decomp(var_results):
     tasks = [t for t in TASK_NAMES if t in var_results]
     ncols, nrows = 3, 3
@@ -304,41 +344,7 @@ def plot_variance_decomp(var_results):
     axes = axes.flatten()
 
     for ax, task in zip(axes, tasks):
-        r = var_results[task]
-        within = r["within"]
-        between = r["between"]
-
-        if len(within) == 0 and len(between) == 0:
-            ax.text(0.5, 0.5, "no data", ha="center", va="center",
-                    transform=ax.transAxes, fontsize=9)
-            ax.set_title(TASK_LABELS.get(task, task), fontsize=9)
-            continue
-
-        data = [d for d in [within, between] if len(d) > 0]
-        pos = [i for i, d in enumerate([within, between]) if len(d) > 0]
-
-        parts = ax.violinplot(data, positions=pos, showmedians=True, showextrema=True)
-        colors = ["#2166ac", "#d6604d"]
-        for body, color in zip(parts["bodies"], [colors[p] for p in pos]):
-            body.set_facecolor(color)
-            body.set_alpha(0.6)
-
-        ax.set_xticks([0, 1])
-        ax.set_xticklabels(
-            ["within-config\n(stochastic)", "between-config\n(HP-driven)"],
-            fontsize=7)
-        ax.set_ylim(-0.25, 1.1)
-        ax.set_ylabel("Spearman r", fontsize=8)
-        ax.tick_params(labelsize=7)
-        ax.axhline(0, color="grey", lw=0.7, ls="--")
-
-        med_w = np.median(within) if len(within) > 0 else float("nan")
-        med_b = np.median(between) if len(between) > 0 else float("nan")
-        gap = med_b - med_w
-        ax.set_title(
-            f"{TASK_LABELS.get(task, task)}\n"
-            f"within={med_w:.3f}  between={med_b:.3f}  Δ={gap:+.3f}",
-            fontsize=8.5)
+        _draw_var_ax(ax, task, var_results[task])
 
     for ax in axes[len(tasks):]:
         ax.set_visible(False)
@@ -466,7 +472,9 @@ def main():
         between = sub[sub["pair_type"] == "between_config"]["spearman_r"].values
         all_var_results[t] = {"within": within, "between": between}
 
-    # --- Save figures ---
+    suf = metric_suffix(args.metric)
+
+    # --- Save combined figures (PDF) and per-task PNGs ---
     if all_nc_results:
         fig_nc = plot_noise_ceiling(all_nc_results, thresholds)
         out_nc = out_figures / "f1_noise_ceiling.pdf"
@@ -474,12 +482,38 @@ def main():
         plt.close(fig_nc)
         print(f"Saved: {out_nc}")
 
+        nc_final = FINAL_DIR / "reliability/figures/noise_ceiling"
+        nc_final.mkdir(parents=True, exist_ok=True)
+        fig_nc_combined = plot_noise_ceiling(all_nc_results, thresholds)
+        fig_nc_combined.savefig(nc_final / f"noise_ceiling_combined{suf}.png", dpi=200, bbox_inches="tight")
+        plt.close(fig_nc_combined)
+        for task, corrs in all_nc_results.items():
+            fig_t, ax_t = plt.subplots(figsize=(3.5, 4))
+            _draw_nc_ax(ax_t, task, corrs, thresholds)
+            fig_t.tight_layout()
+            fig_t.savefig(nc_final / f"noise_ceiling_{task}{suf}.png", dpi=200, bbox_inches="tight")
+            plt.close(fig_t)
+        print(f"Saved: combined + {len(all_nc_results)} per-task PNGs → {nc_final}")
+
     if all_var_results:
         fig_var = plot_variance_decomp(all_var_results)
         out_var = out_figures / "f1_variance_decomposition.pdf"
         fig_var.savefig(out_var, bbox_inches="tight")
         plt.close(fig_var)
         print(f"Saved: {out_var}")
+
+        var_final = FINAL_DIR / "reliability/figures/variance_decomposition"
+        var_final.mkdir(parents=True, exist_ok=True)
+        fig_var_combined = plot_variance_decomp(all_var_results)
+        fig_var_combined.savefig(var_final / f"variance_decomposition_combined{suf}.png", dpi=200, bbox_inches="tight")
+        plt.close(fig_var_combined)
+        for task, r in all_var_results.items():
+            fig_t, ax_t = plt.subplots(figsize=(3.5, 4))
+            _draw_var_ax(ax_t, task, r)
+            fig_t.tight_layout()
+            fig_t.savefig(var_final / f"variance_decomposition_{task}{suf}.png", dpi=200, bbox_inches="tight")
+            plt.close(fig_t)
+        print(f"Saved: combined + {len(all_var_results)} per-task PNGs → {var_final}")
 
 
 if __name__ == "__main__":

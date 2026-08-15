@@ -31,7 +31,7 @@ import pandas as pd
 ANALYSIS = Path(__file__).parent
 sys.path.insert(0, str(ANALYSIS))
 from analysis_utils import (
-    FIGURES_DIR,
+    FIGURES_DIR, FINAL_DIR,
     PRODUCTION_DIR,
     TABLES_DIR,
     TASK_NAMES,
@@ -204,6 +204,9 @@ def save_task_pdf(task: str, df: pd.DataFrame, thresholds: dict, meta: dict):
         return ticks, labels
 
     out = FIGURES_DIR / f"heatmaps_{task}.pdf"
+    final_dir = FINAL_DIR / "hp_coverage/figures/heatmaps"
+    final_dir.mkdir(parents=True, exist_ok=True)
+
     with PdfPages(out) as pdf:
 
         # --- Page 1: Continuous × Continuous ----------------------------
@@ -220,7 +223,9 @@ def save_task_pdf(task: str, df: pd.DataFrame, thresholds: dict, meta: dict):
                 title=f"{HP_LABELS.get(hp_x,hp_x)} × {HP_LABELS.get(hp_y,hp_y)}",
             )))
         fig = _page(pairs_data, "Continuous × Continuous", display)
-        pdf.savefig(fig, bbox_inches="tight"); plt.close(fig)
+        pdf.savefig(fig, bbox_inches="tight")
+        fig.savefig(final_dir / f"heatmaps_{task}_cont_cont.png", dpi=200, bbox_inches="tight")
+        plt.close(fig)
 
         # --- Page 2: Categorical × Continuous ---------------------------
         pairs_data = []
@@ -240,7 +245,9 @@ def save_task_pdf(task: str, df: pd.DataFrame, thresholds: dict, meta: dict):
                     title=f"{HP_LABELS.get(cat_hp,cat_hp)} × {HP_LABELS.get(cont_hp,cont_hp)}",
                 )))
         fig = _page(pairs_data, "Categorical × Continuous", display)
-        pdf.savefig(fig, bbox_inches="tight"); plt.close(fig)
+        pdf.savefig(fig, bbox_inches="tight")
+        fig.savefig(final_dir / f"heatmaps_{task}_cat_cont.png", dpi=200, bbox_inches="tight")
+        plt.close(fig)
 
         # --- Page 3: Categorical × Categorical --------------------------
         pairs_data = []
@@ -258,7 +265,9 @@ def save_task_pdf(task: str, df: pd.DataFrame, thresholds: dict, meta: dict):
                 title=f"{HP_LABELS.get(cat_x,cat_x)} × {HP_LABELS.get(cat_y,cat_y)}",
             )))
         fig = _page(pairs_data, "Categorical × Categorical", display)
-        pdf.savefig(fig, bbox_inches="tight"); plt.close(fig)
+        pdf.savefig(fig, bbox_inches="tight")
+        fig.savefig(final_dir / f"heatmaps_{task}_cat_cat.png", dpi=200, bbox_inches="tight")
+        plt.close(fig)
 
     return out
 

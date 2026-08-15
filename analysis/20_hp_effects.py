@@ -33,7 +33,7 @@ from scipy.stats import spearmanr
 
 ANALYSIS = Path(__file__).parent
 sys.path.insert(0, str(ANALYSIS))
-from analysis_utils import FIGURES_DIR, RDM_DIR, TABLES_DIR, TASK_NAMES, RL_TASKS, metric_output_dirs, get_depth, is_run_successful
+from analysis_utils import FIGURES_DIR, FINAL_DIR, RDM_DIR, TABLES_DIR, TASK_NAMES, RL_TASKS, metric_output_dirs, metric_suffix, get_depth, is_run_successful
 
 TASK_DIR_OVERRIDES = {}
 RNN_TASKS          = {"adding", "mnist_rnn"}
@@ -57,6 +57,8 @@ PRIMARY_MODEL = {
 CONT_HPS = ["hp_learning_rate", "hp_l1_reg", "hp_l2_reg", "hp_hidden_size", "hp_batch_size"]
 # CIFAR: no l1_reg/optimizer/init_scale; depth treated as continuous (3 levels)
 CONT_HPS_CIFAR = ["hp_learning_rate", "hp_l2_reg", "hp_hidden_size", "hp_batch_size", "hp_depth"]
+# Q*bert: RL task with entropy_coef and gamma as additional continuous HPs
+CONT_HPS_QBERT = ["hp_learning_rate", "hp_entropy_coef", "hp_gamma", "hp_hidden_size"]
 CONT_LABELS = {
     "hp_learning_rate": "lr",
     "hp_l1_reg":        "l1",
@@ -64,6 +66,8 @@ CONT_LABELS = {
     "hp_hidden_size":   "hidden_size",
     "hp_batch_size":    "batch_size",
     "hp_depth":         "depth",
+    "hp_entropy_coef":  "entropy_coef",
+    "hp_gamma":         "gamma",
 }
 
 # Categorical HPs: (attr_name, level_A_label, level_B_label)
@@ -338,7 +342,9 @@ def compute_effects(df, task):
     is_qbert = task == "qbert"
     rows     = []
 
-    cont_hps = CONT_HPS_CIFAR if is_cifar else CONT_HPS
+    cont_hps = (CONT_HPS_CIFAR  if is_cifar  else
+                CONT_HPS_QBERT  if is_qbert  else
+                CONT_HPS)
     cat_hps  = (CAT_HPS_QBERT     if is_qbert else
                 CAT_HPS_CIFAR     if is_cifar  else
                 CAT_HPS_RNN       if is_rnn    else
@@ -381,7 +387,9 @@ def hp_row_order(task):
     is_rnn   = task in RNN_TASKS
     is_cifar = task == "cifar10"
     is_qbert = task == "qbert"
-    cont_hps = CONT_HPS_CIFAR if is_cifar else CONT_HPS
+    cont_hps = (CONT_HPS_CIFAR  if is_cifar  else
+                CONT_HPS_QBERT  if is_qbert  else
+                CONT_HPS)
     cat_hps  = (CAT_HPS_QBERT     if is_qbert else
                 CAT_HPS_CIFAR     if is_cifar  else
                 CAT_HPS_RNN       if is_rnn    else
@@ -413,7 +421,57 @@ def make_heatmap(ax, mat, row_labels, col_labels, title):
             if np.isfinite(v):
                 ax.text(j, i, f"{v:.2f}", ha="center", va="center",
                         fontsize=5.5, color="white" if abs(v) > 0.4 else "black")
+            else:
+                ax.text(j, i, "N/A", ha="center", va="center",
+                        fontsize=5.5, color="#888888")
     return im
+
+
+def make_task_png(effects_df, task):
+    """Single-task HP effects heatmap for saving to analysis_final/."""
+    sub = effects_df[effects_df["task"] == task]
+    if sub.empty:
+        return None
+    hp_order = [h for h in hp_row_order(task) if len(sub[sub["hp"] == h]) > 0]
+    mat = np.full((len(hp_order), len(RDM_PROPS)), np.nan)
+    for r, hp in enumerate(hp_order):
+        for c, prop in enumerate(RDM_PROPS):
+            val = sub[(sub["hp"] == hp) & (sub["rdm_prop"] == prop)]["effect"]
+            if len(val):
+                mat[r, c] = val.iloc[0]
+
+    vmax = max(0.3, round(np.nanmax(np.abs(mat)), 1))
+    fig, ax = plt.subplots(figsize=(max(4, 1.2 * len(RDM_PROPS)), max(3, 0.45 * len(hp_order))))
+
+    row_labels = []
+    for h in hp_order:
+        s = sub[sub["hp"] == h]
+        is_c = (s["hp_type"].iloc[0] == "categorical") if len(s) else False
+        row_labels.append(hp_label(h, is_c, task))
+
+    col_labels = [RDM_LABELS[p] for p in RDM_PROPS]
+
+    im = ax.imshow(mat, cmap="RdBu_r", vmin=-vmax, vmax=vmax, aspect="auto")
+    ax.set_xticks(range(len(col_labels)))
+    ax.set_xticklabels(col_labels, fontsize=8, rotation=30, ha="right")
+    ax.set_yticks(range(len(row_labels)))
+    ax.set_yticklabels(row_labels, fontsize=8)
+    ax.set_title(f"HP effects — {TASK_SHORT.get(task, task)}", fontsize=9, fontweight="bold")
+
+    for ri in range(mat.shape[0]):
+        for ci in range(mat.shape[1]):
+            v = mat[ri, ci]
+            if np.isfinite(v):
+                ax.text(ci, ri, f"{v:.2f}", ha="center", va="center",
+                        fontsize=6.5,
+                        color="white" if abs(v) > 0.5 * vmax else "black")
+            else:
+                ax.text(ci, ri, "N/A", ha="center", va="center",
+                        fontsize=6.5, color="#888888")
+
+    plt.colorbar(im, ax=ax, label="signed effect size")
+    fig.tight_layout()
+    return fig
 
 
 def make_figure(effects_df, task_dfs):
@@ -595,13 +653,24 @@ def main():
     effects_df.to_csv(csv_path, index=False)
     print(f"\nSaved: {csv_path}")
 
-    # Figure
+    # Combined figure (PDF)
     fig = make_figure(effects_df, task_dfs)
     if fig:
         out = out_figures / "f2_hp_effects.pdf"
         fig.savefig(out, bbox_inches="tight", dpi=150)
         plt.close(fig)
         print(f"Saved: {out}")
+
+    # Per-task PNGs
+    suf = metric_suffix(args.metric)
+    hp_final = FINAL_DIR / "hp_effects/figures/hp_effects"
+    hp_final.mkdir(parents=True, exist_ok=True)
+    for task in task_dfs:
+        fig_t = make_task_png(effects_df, task)
+        if fig_t is not None:
+            fig_t.savefig(hp_final / f"hp_effects_{task}{suf}.png", dpi=200, bbox_inches="tight")
+            plt.close(fig_t)
+    print(f"Saved: {len(task_dfs)} per-task PNGs → {hp_final}")
 
     # Print top effects per task for a quick summary
     print("\n=== Top HP effects (|effect| > 0.15) ===")

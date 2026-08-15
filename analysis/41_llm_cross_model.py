@@ -30,12 +30,13 @@ ANALYSIS  = Path(__file__).parent
 REPO_ROOT = ANALYSIS.parent
 sys.path.insert(0, str(ANALYSIS))
 
-from analysis_utils import FIGURES_DIR, TABLES_DIR
+from analysis_utils import FIGURES_DIR, TABLES_DIR, FINAL_DIR
 
-ACT_DIR  = REPO_ROOT / "output" / "production" / "llm" / "activations"
-RDM_DIR  = REPO_ROOT / "output" / "analysis" / "rdms" / "llm"
-FIG_DIR  = FIGURES_DIR / "llm"
-TAB_DIR  = TABLES_DIR
+ACT_DIR          = REPO_ROOT / "output" / "production" / "llm" / "activations"
+RDM_DIR          = REPO_ROOT / "output" / "analysis" / "rdms" / "llm"
+FIG_DIR          = FIGURES_DIR / "llm"
+TAB_DIR          = TABLES_DIR
+FINAL_LLM_CROSS  = FINAL_DIR / "llm" / "figures" / "cross_model"
 
 N_REQUEST = 128
 N_PASSAGE = 128
@@ -604,6 +605,8 @@ def plot_a1(df_a1):
     fig.suptitle("A.1 Cross-model agreement across layer positions", fontsize=11)
     fig.tight_layout()
     fig.savefig(FIG_DIR / "A1_cross_model_agreement.pdf")
+    FINAL_LLM_CROSS.mkdir(parents=True, exist_ok=True)
+    fig.savefig(FINAL_LLM_CROSS / "A1_cross_model_agreement.png", dpi=200, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -640,6 +643,8 @@ def plot_a4(df_a4):
         fig.suptitle(f"A.4 Category structure depth profile — {subset}", fontsize=10)
         fig.tight_layout()
         fig.savefig(FIG_DIR / f"A4_depth_profiles_{subset}.pdf")
+        FINAL_LLM_CROSS.mkdir(parents=True, exist_ok=True)
+        fig.savefig(FINAL_LLM_CROSS / f"A4_depth_profiles_{subset}.png", dpi=200, bbox_inches="tight")
         plt.close(fig)
 
 
@@ -705,6 +710,8 @@ def plot_a7(pooling, best_layer_pos):
     fig.suptitle(f"A.7 Cross-model RSA ({pooling}-pool, {best_layer_pos})", fontsize=11)
     fig.tight_layout(rect=[0, 0.05, 1, 1])
     fig.savefig(FIG_DIR / "A7_cross_model_matrix.pdf", bbox_inches="tight")
+    FINAL_LLM_CROSS.mkdir(parents=True, exist_ok=True)
+    fig.savefig(FINAL_LLM_CROSS / "A7_cross_model_matrix.png", dpi=200, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -739,6 +746,8 @@ def plot_a5(df_a5):
     fig.suptitle("A.5 Base vs instruct — category structure", fontsize=11)
     fig.tight_layout()
     fig.savefig(FIG_DIR / "A5_base_instruct.pdf")
+    FINAL_LLM_CROSS.mkdir(parents=True, exist_ok=True)
+    fig.savefig(FINAL_LLM_CROSS / "A5_base_instruct.png", dpi=200, bbox_inches="tight")
     plt.close(fig)
 
 

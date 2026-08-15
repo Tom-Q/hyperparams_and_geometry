@@ -36,8 +36,8 @@ import pandas as pd
 ANALYSIS = Path(__file__).parent
 sys.path.insert(0, str(ANALYSIS))
 from analysis_utils import (
-    DATASET_DIR, FIGURES_DIR, RDM_DIR, TABLES_DIR, TASK_NAMES, RL_TASKS, task_meta, get_depth,
-    task_run_dir,
+    DATASET_DIR, FIGURES_DIR, FINAL_DIR, RDM_DIR, TABLES_DIR, TASK_NAMES, RL_TASKS, task_meta,
+    get_depth, task_run_dir,
 )
 
 TASK_DIR_OVERRIDES = {}
@@ -197,8 +197,8 @@ def plot_dimensionality_main(df, thresholds):
       Middle: Scatter PR vs. normalised performance (all networks)
       Right:  Scatter PR vs. hidden_size (successful networks)
     """
-    fig = plt.figure(figsize=(18, 6))
-    gs  = fig.add_gridspec(1, 3, wspace=0.35)
+    fig = plt.figure(figsize=(20, 7))
+    gs  = fig.add_gridspec(1, 3, wspace=0.38)
     ax_v = fig.add_subplot(gs[0])
     ax_p = fig.add_subplot(gs[1])
     ax_h = fig.add_subplot(gs[2])
@@ -232,8 +232,11 @@ def plot_dimensionality_main(df, thresholds):
         sub = df[df["task"] == task].copy()
         th  = thresholds.get(task)
         chance = meta[task].get("chance_perf", 0)
+        max_m  = meta[task].get("max_metric", None)
         if th and th != chance:
             sub["norm_perf"] = (sub["performance"] - chance) / (th - chance)
+        elif max_m and max_m != chance:
+            sub["norm_perf"] = (sub["performance"] - chance) / (max_m - chance)
         else:
             sub["norm_perf"] = sub["performance"]
         ax_p.scatter(sub["norm_perf"], sub["pr_last"],
@@ -265,10 +268,52 @@ def plot_dimensionality_main(df, thresholds):
     ax_h.set_title("PR vs. hidden_size\n(successful networks only)", fontsize=9)
     ax_h.legend(fontsize=6, markerscale=3, loc="upper left", framealpha=0.8)
 
-    fig.suptitle("Effective dimensionality — participation ratio of activation covariance\n"
-                 "(stimulus space covariance, last hidden layer)",
-                 fontsize=11)
+    fig.suptitle("Effective dimensionality — participation ratio of activation covariance"
+                 " (stimulus space covariance, last hidden layer)",
+                 fontsize=10)
+    fig.tight_layout(rect=[0, 0, 1, 0.94])
     return fig
+
+
+def _draw_violin_task_ax(ax, task, df, thresholds, color):
+    th = thresholds.get(task)
+    sub = df[df["task"] == task]
+    if th is not None:
+        sub = sub[sub["performance"] >= th]
+    vals = sub["pr_last"].dropna()
+    if len(vals) < 3:
+        ax.text(0.5, 0.5, "no data", ha="center", va="center",
+                transform=ax.transAxes, fontsize=9)
+    else:
+        parts = ax.violinplot([vals], positions=[0], showmedians=True, showextrema=True)
+        parts["bodies"][0].set_facecolor(color)
+        parts["bodies"][0].set_alpha(0.6)
+        ax.set_xticks([])
+    ax.set_ylabel("Participation ratio (PR)", fontsize=9)
+    ax.set_title(TASK_LABELS.get(task, task).replace("\n", " "), fontsize=9, fontweight="bold")
+    ax.tick_params(labelsize=8)
+
+
+def _draw_layer_task_ax(ax, task, df, thresholds):
+    meta = task_meta()
+    sub = df[(df["task"] == task) & (df["depth"] == 2)].dropna(subset=["pr_l0", "pr_l1"])
+    th = thresholds.get(task)
+    chance = meta[task].get("chance_perf", 0)
+    sub = sub.copy()
+    if th and th != chance:
+        sub["norm_perf"] = (sub["performance"] - chance) / (th - chance)
+    else:
+        sub["norm_perf"] = sub["performance"]
+    sc = ax.scatter(sub["pr_l0"], sub["pr_l1"],
+                    c=sub["norm_perf"], cmap="RdYlGn",
+                    vmin=0, vmax=1.5, s=3, alpha=0.5, rasterized=True)
+    lim = max(sub["pr_l0"].max(), sub["pr_l1"].max()) * 1.05
+    ax.plot([0, lim], [0, lim], "k--", lw=0.8, alpha=0.4)
+    ax.set_xlabel("PR layer 0", fontsize=8)
+    ax.set_ylabel("PR layer 1", fontsize=8)
+    ax.set_title(TASK_LABELS.get(task, task).replace("\n", " "), fontsize=9, fontweight="bold")
+    ax.tick_params(labelsize=7)
+    plt.colorbar(sc, ax=ax, label="norm. performance")
 
 
 def plot_layer_dimensionality(df, thresholds):
@@ -366,20 +411,55 @@ def main():
     df.to_csv(csv_path, index=False)
     print(f"\nSaved: {csv_path}")
 
-    # Main figure
+    # Main figure (combined, PDF)
     fig_main = plot_dimensionality_main(df, thresholds)
     out_main = FIGURES_DIR / "f1_dimensionality.pdf"
     fig_main.savefig(out_main, bbox_inches="tight", dpi=150)
+
+    # Save overview PNG (cross-task aggregate panels)
+    dim_final = FINAL_DIR / "representational_geometry/figures/dimensionality"
+    dim_final.mkdir(parents=True, exist_ok=True)
+    fig_main.savefig(dim_final / "dimensionality_overview.png", dpi=200, bbox_inches="tight")
     plt.close(fig_main)
     print(f"Saved: {out_main}")
 
-    # Layer comparison figure
+    # Per-task violin PNGs
+    tasks_ordered = [t for t in TASK_NAMES if t in df["task"].unique()]
+    palette = plt.cm.tab10(np.linspace(0, 0.9, len(tasks_ordered)))
+    violin_final = FINAL_DIR / "representational_geometry/figures/dimensionality/violin"
+    violin_final.mkdir(parents=True, exist_ok=True)
+    for i, task in enumerate(tasks_ordered):
+        fig_t, ax_t = plt.subplots(figsize=(3, 4))
+        _draw_violin_task_ax(ax_t, task, df, thresholds, palette[i])
+        fig_t.tight_layout()
+        fig_t.savefig(violin_final / f"dimensionality_violin_{task}.png", dpi=200, bbox_inches="tight")
+        plt.close(fig_t)
+    print(f"Saved: {len(tasks_ordered)} violin PNGs → {violin_final}")
+
+    # Layer comparison figure (combined, PDF)
     fig_layer = plot_layer_dimensionality(df, thresholds)
     if fig_layer is not None:
         out_layer = FIGURES_DIR / "f1_dimensionality_layers.pdf"
         fig_layer.savefig(out_layer, bbox_inches="tight", dpi=150)
+
+        # Also save combined PNG
+        fig_layer.savefig(dim_final / "dimensionality_layers_overview.png", dpi=200, bbox_inches="tight")
         plt.close(fig_layer)
         print(f"Saved: {out_layer}")
+
+        # Per-task layer scatter PNGs
+        tasks_depth2 = [t for t in TASK_NAMES
+                        if t in df["task"].unique() and
+                        df[(df["task"] == t) & (df["depth"] == 2)]["pr_l1"].notna().sum() >= 3]
+        layer_final = FINAL_DIR / "representational_geometry/figures/dimensionality/layer_comparison"
+        layer_final.mkdir(parents=True, exist_ok=True)
+        for task in tasks_depth2:
+            fig_t, ax_t = plt.subplots(figsize=(4.5, 4))
+            _draw_layer_task_ax(ax_t, task, df, thresholds)
+            fig_t.tight_layout()
+            fig_t.savefig(layer_final / f"dimensionality_layers_{task}.png", dpi=200, bbox_inches="tight")
+            plt.close(fig_t)
+        print(f"Saved: {len(tasks_depth2)} layer-comparison PNGs → {layer_final}")
 
 
 if __name__ == "__main__":

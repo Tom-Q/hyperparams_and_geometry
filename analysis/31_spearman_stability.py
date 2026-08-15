@@ -28,7 +28,7 @@ from scipy.stats import spearmanr
 ANALYSIS = Path(__file__).parent
 REPO_ROOT = ANALYSIS.parent
 sys.path.insert(0, str(ANALYSIS))
-from analysis_utils import TABLES_DIR, FIGURES_DIR, RL_TASKS, TASK_NAMES, get_depth_from_config
+from analysis_utils import TABLES_DIR, FIGURES_DIR, FINAL_DIR, RL_TASKS, TASK_NAMES, get_depth_from_config
 
 PROD_DIR  = REPO_ROOT / "output" / "production"
 RNN_TASKS = {"adding", "mnist_rnn"}
@@ -223,6 +223,9 @@ def main():
         fig = make_figure(df, thresholds, window_pct)
         fig_out = FIGURES_DIR / f"spearman_stability_{window_label}.pdf"
         fig.savefig(fig_out, bbox_inches="tight", dpi=130)
+        ss_final = FINAL_DIR / "learning_dynamics/figures/spearman_stability"
+        ss_final.mkdir(parents=True, exist_ok=True)
+        fig.savefig(ss_final / f"spearman_stability_{window_label}.png", dpi=200, bbox_inches="tight")
         plt.close(fig)
         print(f"  Saved: {fig_out.name}")
 

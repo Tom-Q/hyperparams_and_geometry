@@ -33,7 +33,7 @@ import numpy as np
 
 ANALYSIS = Path(__file__).parent
 sys.path.insert(0, str(ANALYSIS))
-from analysis_utils import FIGURES_DIR, CACHE_DIR
+from analysis_utils import FIGURES_DIR, CACHE_DIR, FINAL_DIR
 
 MODELS_DIR = CACHE_DIR / "category_models"
 
@@ -382,6 +382,11 @@ def main():
         fig = make_task_figure(task_name, model_dict, sort_dict, display_name)
         out_fig = FIGURES_DIR / f"category_models_{task_name}.pdf"
         fig.savefig(out_fig, bbox_inches="tight")
+
+        final_dir = FINAL_DIR / "representational_geometry/figures/category_models"
+        final_dir.mkdir(parents=True, exist_ok=True)
+        fig.savefig(final_dir / f"category_models_{task_name}.png", dpi=200, bbox_inches="tight")
+
         plt.close(fig)
         print(f"    saved: {out_fig.name}")
 

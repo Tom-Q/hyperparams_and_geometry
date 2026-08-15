@@ -36,7 +36,7 @@ from scipy.stats import spearmanr
 ANALYSIS = Path(__file__).parent
 sys.path.insert(0, str(ANALYSIS))
 from analysis_utils import (
-    CACHE_DIR, RDM_DIR, TABLES_DIR, TASK_NAMES, RL_TASKS, metric_output_dirs, get_depth,
+    CACHE_DIR, RDM_DIR, TABLES_DIR, FINAL_DIR, TASK_NAMES, RL_TASKS, metric_output_dirs, metric_suffix, get_depth,
 )
 
 RNN_TASKS = {"adding", "mnist_rnn"}
@@ -482,6 +482,10 @@ def main():
         (3, 2): "depth=3, layer_2  (third hidden)",
     }
 
+    suf = metric_suffix(args.metric)
+    lc_final = FINAL_DIR / "hp_effects/figures/layer_comparison"
+    lc_final.mkdir(parents=True, exist_ok=True)
+
     pdf_path = out_figures / "f2_layer_comparison.pdf"
     with PdfPages(pdf_path) as pdf:
         for key in sorted(effects_by_group.keys()):
@@ -489,6 +493,8 @@ def main():
             label = layer_labels.get(key, f"depth={key[0]}, layer_{key[1]}")
             fig = make_layer_figure(effects_dict, label, vmax_global)
             pdf.savefig(fig, bbox_inches="tight")
+            png_name = f"hp_layer_d{key[0]}_l{key[1]}{suf}.png"
+            fig.savefig(lc_final / png_name, dpi=200, bbox_inches="tight")
             plt.close(fig)
 
     print(f"Saved: {pdf_path}")

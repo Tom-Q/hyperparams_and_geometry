@@ -40,7 +40,7 @@ ANALYSIS  = Path(__file__).parent
 REPO_ROOT = ANALYSIS.parent
 sys.path.insert(0, str(ANALYSIS))
 
-from analysis_utils import FIGURES_DIR, RDM_DIR, TABLES_DIR
+from analysis_utils import FIGURES_DIR, RDM_DIR, TABLES_DIR, FINAL_DIR
 
 H5_PATH = RDM_DIR / "qbert_rdms.h5"
 ACT_DIR = REPO_ROOT / "output" / "production" / "qbert"
@@ -166,6 +166,9 @@ def analysis_noise_ceiling(h5):
     ax.set_ylim(bottom=0)
     fig.tight_layout()
     fig.savefig(FIG_DIR / "qbert_noise_ceiling.pdf")
+    qb_nc = FINAL_DIR / "reliability/figures/noise_ceiling"
+    qb_nc.mkdir(parents=True, exist_ok=True)
+    fig.savefig(qb_nc / "qbert_noise_ceiling.png", dpi=200, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved: qbert_noise_ceiling.pdf")
 
@@ -223,6 +226,9 @@ def analysis_layer_comparison(h5):
         ax.legend(fontsize=8)
     fig.tight_layout()
     fig.savefig(FIG_DIR / "qbert_layer_comparison.pdf")
+    qb_lc = FINAL_DIR / "representational_geometry/figures/layer_comparison"
+    qb_lc.mkdir(parents=True, exist_ok=True)
+    fig.savefig(qb_lc / "qbert_layer_comparison.png", dpi=200, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved: qbert_layer_comparison.pdf")
 
@@ -312,6 +318,9 @@ def analysis_dimensionality(h5):
 
     fig.tight_layout()
     fig.savefig(FIG_DIR / "qbert_dimensionality.pdf")
+    qb_dim = FINAL_DIR / "representational_geometry/figures/dimensionality"
+    qb_dim.mkdir(parents=True, exist_ok=True)
+    fig.savefig(qb_dim / "qbert_dimensionality.png", dpi=200, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved: qbert_dimensionality.pdf")
 
@@ -384,6 +393,9 @@ def analysis_dynamics(h5):
     ax.legend(fontsize=8)
     fig.tight_layout()
     fig.savefig(FIG_DIR / "qbert_dynamics.pdf")
+    qb_dyn = FINAL_DIR / "learning_dynamics/figures/crystallization"
+    qb_dyn.mkdir(parents=True, exist_ok=True)
+    fig.savefig(qb_dyn / "qbert_dynamics.png", dpi=200, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved: qbert_dynamics.pdf")
 
@@ -464,6 +476,9 @@ def analysis_arch_effects(h5):
     fig.suptitle("Within vs across-group RDM agreement (functional, last layer, final)")
     fig.tight_layout()
     fig.savefig(FIG_DIR / "qbert_arch_effects.pdf")
+    qb_ae = FINAL_DIR / "hp_effects/figures/hp_effects"
+    qb_ae.mkdir(parents=True, exist_ok=True)
+    fig.savefig(qb_ae / "qbert_arch_effects.png", dpi=200, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved: qbert_arch_effects.pdf")
 

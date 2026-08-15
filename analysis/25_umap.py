@@ -35,7 +35,7 @@ import umap
 
 ANALYSIS = Path(__file__).parent
 sys.path.insert(0, str(ANALYSIS))
-from analysis_utils import RDM_DIR, TASK_NAMES, RL_TASKS, metric_output_dirs, get_depth
+from analysis_utils import RDM_DIR, TASK_NAMES, RL_TASKS, FINAL_DIR, metric_output_dirs, metric_suffix, get_depth
 
 RNN_TASKS = {"adding", "mnist_rnn"}
 NAN_TASKS = {"adding"}
@@ -337,6 +337,10 @@ def main():
 
     all_coord_rows = []
 
+    suf = metric_suffix(args.metric)
+    umap_final = FINAL_DIR / "hp_effects/figures/umap"
+    umap_final.mkdir(parents=True, exist_ok=True)
+
     pdf_path = out_figures / "f2_umap.pdf"
     with PdfPages(pdf_path) as pdf:
         for task in TASK_NAMES:
@@ -387,6 +391,7 @@ def main():
             print(f"    making figure ...", flush=True)
             fig = make_task_page(embedding, hp_df, task)
             pdf.savefig(fig, bbox_inches="tight")
+            fig.savefig(umap_final / f"umap_{task}{suf}.png", dpi=200, bbox_inches="tight")
             plt.close(fig)
             print(f"    done.")
 

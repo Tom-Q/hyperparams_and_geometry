@@ -44,7 +44,7 @@ import umap
 ANALYSIS = Path(__file__).parent
 sys.path.insert(0, str(ANALYSIS))
 from analysis_utils import (
-    FIGURES_DIR,
+    FIGURES_DIR, FINAL_DIR,
     TABLES_DIR,
     TASK_NAMES,
     load_task_df,
@@ -281,6 +281,8 @@ def run_mode(stem, embed_label, umap_metric, builder_fn, meta_all):
     all_coord_rows = []
     pdf_path    = FIGURES_DIR / f"{stem}.pdf"
     coords_path = TABLES_DIR  / f"{stem}_coords.csv"
+    final_dir   = FINAL_DIR / "hp_coverage/figures/hp_umap"
+    final_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"\n=== {embed_label} ===")
     with PdfPages(pdf_path) as pdf:
@@ -318,6 +320,7 @@ def run_mode(stem, embed_label, umap_metric, builder_fn, meta_all):
 
             fig = make_task_page(embedding, df_prim, task, meta, embed_label)
             pdf.savefig(fig, bbox_inches="tight")
+            fig.savefig(final_dir / f"{stem}_{task}.png", dpi=200, bbox_inches="tight")
             plt.close(fig)
 
     print(f"  Saved: {pdf_path}")

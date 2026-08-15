@@ -36,7 +36,7 @@ import pandas as pd
 
 ANALYSIS = Path(__file__).parent
 sys.path.insert(0, str(ANALYSIS))
-from analysis_utils import TASK_NAMES, RL_TASKS, metric_output_dirs
+from analysis_utils import TASK_NAMES, RL_TASKS, FINAL_DIR, metric_output_dirs, metric_suffix
 
 RNN_TASKS = {"adding", "mnist_rnn"}
 
@@ -608,6 +608,10 @@ def main():
         if present:
             tasks_by_paradigm.append((paradigm_name, present))
 
+    suf = metric_suffix(args.metric)
+    cca_final = FINAL_DIR / "hp_effects/figures/cca"
+    cca_final.mkdir(parents=True, exist_ok=True)
+
     pdf_path = out_figures / "f2_cca.pdf"
     with PdfPages(pdf_path) as pdf:
         for kind, label in [("composites", "CCA — composites"),
@@ -619,6 +623,7 @@ def main():
             fig = _make_heatmap_page(results, kind, tasks_by_paradigm, full_title)
             if fig is not None:
                 pdf.savefig(fig, bbox_inches="tight")
+                fig.savefig(cca_final / f"cca_{kind}{suf}.png", dpi=200, bbox_inches="tight")
                 plt.close(fig)
 
     print(f"\nSaved: {pdf_path}")

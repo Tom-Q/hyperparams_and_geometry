@@ -30,7 +30,7 @@ from sklearn.manifold import MDS
 ANALYSIS  = Path(__file__).parent
 REPO_ROOT = ANALYSIS.parent
 sys.path.insert(0, str(ANALYSIS))
-from analysis_utils import RDM_DIR, TABLES_DIR, FIGURES_DIR, RL_TASKS, TASK_NAMES, get_depth, is_run_successful
+from analysis_utils import RDM_DIR, TABLES_DIR, FIGURES_DIR, FINAL_DIR, RL_TASKS, TASK_NAMES, get_depth, is_run_successful, metric_suffix
 
 RNN_TASKS = {"adding", "mnist_rnn"}
 N_NETS        = 500          # upper bound on networks; actual count also limited by MAX_POINTS
@@ -291,9 +291,16 @@ def main():
             continue
         out = FIGURES_DIR / f"trajectory_mds_{task}.pdf"
         fig.savefig(out, bbox_inches="tight", dpi=130)
+
+        suf = metric_suffix(METRIC)
+        final_dir = FINAL_DIR / "learning_dynamics/figures/trajectory_mds"
+        final_dir.mkdir(parents=True, exist_ok=True)
+        out_png = final_dir / f"trajectory_mds_{task}{suf}.png"
+        fig.savefig(out_png, dpi=200, bbox_inches="tight")
+
         plt.close(fig)
         gc.collect()
-        print(f"  Saved: {out.name}")
+        print(f"  Saved: {out.name}, {out_png.name}")
 
 
 if __name__ == "__main__":

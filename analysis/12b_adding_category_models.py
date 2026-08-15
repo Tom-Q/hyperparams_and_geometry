@@ -36,7 +36,7 @@ import numpy as np
 
 ANALYSIS = Path(__file__).parent
 sys.path.insert(0, str(ANALYSIS))
-from analysis_utils import CACHE_DIR, FIGURES_DIR, RDM_DIR
+from analysis_utils import CACHE_DIR, FIGURES_DIR, FINAL_DIR, RDM_DIR
 
 MODELS_DIR = CACHE_DIR / "category_models"
 ADDING_H5  = RDM_DIR / "adding_rdms.h5"
@@ -139,6 +139,9 @@ def main():
     fig = make_figure(models, row_stim, row_phase)
     out_fig = FIGURES_DIR / "category_models_adding_temporal.pdf"
     fig.savefig(out_fig, bbox_inches="tight")
+    final_dir = FINAL_DIR / "representational_geometry/figures/category_models"
+    final_dir.mkdir(parents=True, exist_ok=True)
+    fig.savefig(final_dir / "category_models_adding_temporal.png", dpi=200, bbox_inches="tight")
     plt.close(fig)
     print(f"Saved: {out_fig.name}")
 

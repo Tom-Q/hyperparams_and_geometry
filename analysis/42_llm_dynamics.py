@@ -34,11 +34,12 @@ ANALYSIS  = Path(__file__).parent
 REPO_ROOT = ANALYSIS.parent
 sys.path.insert(0, str(ANALYSIS))
 
-from analysis_utils import FIGURES_DIR, TABLES_DIR
+from analysis_utils import FIGURES_DIR, TABLES_DIR, FINAL_DIR
 
-RDM_DIR = REPO_ROOT / "output" / "analysis" / "rdms" / "llm"
-FIG_DIR = FIGURES_DIR / "llm"
-TAB_DIR = TABLES_DIR
+RDM_DIR         = REPO_ROOT / "output" / "analysis" / "rdms" / "llm"
+FIG_DIR         = FIGURES_DIR / "llm"
+TAB_DIR         = TABLES_DIR
+FINAL_LLM_DYN   = FINAL_DIR / "llm" / "figures" / "dynamics"
 
 PYTHIA_SIZES = [
     dict(model_id="EleutherAI/pythia-70m",   n_layers=6,  label="70m",   tokens_b=0.3),
@@ -234,6 +235,8 @@ def plot_crystallisation(cryst_pythia, cryst_olmo, subset):
 
     fig.tight_layout()
     fig.savefig(FIG_DIR / f"BC1_crystallisation_{subset}.pdf")
+    FINAL_LLM_DYN.mkdir(parents=True, exist_ok=True)
+    fig.savefig(FINAL_LLM_DYN / f"BC1_crystallisation_{subset}.png", dpi=200, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -262,6 +265,8 @@ def plot_rate_of_change(rate_pythia, rate_olmo, subset):
 
     fig.tight_layout()
     fig.savefig(FIG_DIR / f"BC2_rate_of_change_{subset}.pdf")
+    FINAL_LLM_DYN.mkdir(parents=True, exist_ok=True)
+    fig.savefig(FINAL_LLM_DYN / f"BC2_rate_of_change_{subset}.png", dpi=200, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -305,6 +310,8 @@ def plot_trajectory_mds_joint(coords, labels, subset):
                  f"dot size/opacity = training progress (small/faint = early)", fontsize=9)
     fig.tight_layout()
     fig.savefig(FIG_DIR / f"BC3_trajectory_mds_{subset}.pdf")
+    FINAL_LLM_DYN.mkdir(parents=True, exist_ok=True)
+    fig.savefig(FINAL_LLM_DYN / f"BC3_trajectory_mds_{subset}.png", dpi=200, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -346,6 +353,8 @@ def plot_c5_cross_architecture(cryst_pythia_1b, cryst_olmo, subset):
     ax.grid(True, which="both", alpha=0.3)
     fig.tight_layout()
     fig.savefig(FIG_DIR / f"C5_cross_architecture_{subset}.pdf")
+    FINAL_LLM_DYN.mkdir(parents=True, exist_ok=True)
+    fig.savefig(FINAL_LLM_DYN / f"C5_cross_architecture_{subset}.png", dpi=200, bbox_inches="tight")
     plt.close(fig)
 
 

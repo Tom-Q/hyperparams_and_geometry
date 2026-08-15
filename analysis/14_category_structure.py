@@ -32,8 +32,8 @@ from scipy.stats import spearmanr
 ANALYSIS = Path(__file__).parent
 sys.path.insert(0, str(ANALYSIS))
 from analysis_utils import (
-    CACHE_DIR, DATASET_DIR, FIGURES_DIR, RDM_DIR, TABLES_DIR,
-    metric_output_dirs,
+    CACHE_DIR, DATASET_DIR, FIGURES_DIR, FINAL_DIR, RDM_DIR, TABLES_DIR,
+    metric_output_dirs, metric_suffix,
     TASK_NAMES, RL_TASKS, task_meta, get_depth, is_run_successful,
 )
 
@@ -466,6 +466,12 @@ def plot_adding_phases(thresholds, metric="cosine", out_figures=FIGURES_DIR):
     fig.tight_layout()
     out = out_figures / "f1_category_adding_phases.pdf"
     fig.savefig(out, bbox_inches="tight")
+
+    suf = metric_suffix(metric)
+    cs_final = FINAL_DIR / "representational_geometry/figures/category_structure"
+    cs_final.mkdir(parents=True, exist_ok=True)
+    fig.savefig(cs_final / f"category_structure_adding_phases{suf}.png", dpi=200, bbox_inches="tight")
+
     plt.close(fig)
     print(f"  Saved: {out}")
 
@@ -589,6 +595,12 @@ def plot_mnist_rnn_temporal(thresholds, metric="cosine", out_figures=FIGURES_DIR
     fig.tight_layout()
     out = out_figures / "f1_category_mnist_rnn_temporal.pdf"
     fig.savefig(out, bbox_inches="tight")
+
+    suf = metric_suffix(metric)
+    cs_final = FINAL_DIR / "representational_geometry/figures/category_structure"
+    cs_final.mkdir(parents=True, exist_ok=True)
+    fig.savefig(cs_final / f"category_structure_mnist_rnn_temporal{suf}.png", dpi=200, bbox_inches="tight")
+
     plt.close(fig)
     print(f"  Saved: {out}")
 
@@ -732,6 +744,19 @@ def main():
     fig.savefig(out_path, bbox_inches="tight", dpi=150)
     plt.close(fig)
     print(f"Saved: {out_path}")
+
+    # Per-task PNGs
+    suf = metric_suffix(args.metric)
+    cs_final = FINAL_DIR / "representational_geometry/figures/category_structure"
+    cs_final.mkdir(parents=True, exist_ok=True)
+    for task in tasks_with_models:
+        sub = full_df[full_df["task"] == task]
+        fig_t, ax_t = plt.subplots(figsize=(6, 5))
+        plot_task(ax_t, task, sub, thresholds, meta[task])
+        fig_t.tight_layout()
+        fig_t.savefig(cs_final / f"category_structure_{task}{suf}.png", dpi=200, bbox_inches="tight")
+        plt.close(fig_t)
+    print(f"Saved: {len(tasks_with_models)} per-task PNGs → {cs_final}")
 
     # Temporal analyses (only when the relevant task was in scope)
     if not args.task or "adding" in args.task:

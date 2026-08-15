@@ -39,7 +39,7 @@ from scipy.stats import spearmanr
 
 ANALYSIS = Path(__file__).parent
 sys.path.insert(0, str(ANALYSIS))
-from analysis_utils import FIGURES_DIR, RDM_DIR, TABLES_DIR, get_depth
+from analysis_utils import FIGURES_DIR, FINAL_DIR, RDM_DIR, TABLES_DIR, get_depth
 
 MNIST_TASKS = ["mnist_dual", "mnist_10way", "mnist_rnn"]
 
@@ -266,13 +266,13 @@ def make_figure(corr_data, median_matrix, task_list):
     from matplotlib.patches import Patch
     handles = [Patch(facecolor=DIAG_COLOR, alpha=0.65, label="within-task"),
                Patch(facecolor=OFF_COLOR,  alpha=0.65, label="cross-task")]
-    ax_viol.legend(handles=handles, fontsize=8, loc="lower right")
+    ax_viol.legend(handles=handles, fontsize=8, loc="lower left")
 
     fig.suptitle(
         "Cross-task RSA — MNIST family\n"
         "(mnist_dual sub-RDM at task=0 stimuli used for cross-task comparison)",
         fontsize=11)
-    fig.tight_layout(rect=[0, 0, 1, 0.95])
+    fig.tight_layout(rect=[0, 0, 1, 0.91])
     return fig
 
 
@@ -338,6 +338,9 @@ def main():
     fig = make_figure(corr_data, median_matrix, MNIST_TASKS)
     out = FIGURES_DIR / "f1_crosstask_rsa.pdf"
     fig.savefig(out, bbox_inches="tight", dpi=150)
+    final_dir = FINAL_DIR / "representational_geometry/figures/crosstask_rsa"
+    final_dir.mkdir(parents=True, exist_ok=True)
+    fig.savefig(final_dir / "crosstask_rsa.png", dpi=200, bbox_inches="tight")
     plt.close(fig)
     print(f"Saved: {out}")
 

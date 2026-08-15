@@ -30,7 +30,7 @@ import pandas as pd
 ANALYSIS = Path(__file__).parent
 sys.path.insert(0, str(ANALYSIS))
 from analysis_utils import (
-    FIGURES_DIR,
+    FIGURES_DIR, FINAL_DIR,
     PRODUCTION_DIR,
     TABLES_DIR,
     TASK_NAMES,
@@ -184,6 +184,9 @@ def main():
 
     out = FIGURES_DIR / "concentration_lorenz.pdf"
     fig.savefig(out, bbox_inches="tight")
+    final_dir = FINAL_DIR / "hp_coverage/figures/concentration"
+    final_dir.mkdir(parents=True, exist_ok=True)
+    fig.savefig(final_dir / "concentration_lorenz.png", dpi=200, bbox_inches="tight")
     print(f"\nSaved figure: {out}")
     print(f"Saved table:  {TABLES_DIR / 'gini.csv'}")
 

@@ -173,6 +173,35 @@ def compute_temporal_cosine_rdm(M_cos):
     return D[rows, cols].astype(np.float32)
 
 
+def compute_phase_pearson_rdms(M_raw):
+    """
+    Compute per-phase Pearson RDMs from M_raw (N_ROWS × H phase-mean activations).
+    For each phase p, selects valid stimuli only (finite rows), mean-centers,
+    unit-normalizes, and returns the upper-triangle Pearson distance vector.
+    Returns a list of N_PHASES arrays (or None for degenerate phases).
+    """
+    results = []
+    for p in range(N_PHASES):
+        mr = M_raw[p::N_PHASES].astype(np.float64)   # (N_STIM, H)
+        valid = np.all(np.isfinite(mr), axis=1)
+        mr_v = mr[valid]
+        n_v = int(valid.sum())
+        if n_v < 2:
+            results.append(None)
+            continue
+        mr_v -= mr_v.mean(axis=1, keepdims=True)
+        norms = np.linalg.norm(mr_v, axis=1)
+        if np.any(norms < 1e-8):
+            results.append(None)
+            continue
+        mr_v /= norms[:, None]
+        gram = mr_v @ mr_v.T
+        D = np.clip(1.0 - gram, 0.0, 2.0)
+        ri, ci = np.triu_indices(n_v, k=1)
+        results.append(D[ri, ci].astype(np.float32))
+    return results
+
+
 def compute_temporal_pearson_rdm(M_raw):
     """
     Pearson-distance temporal RDM from raw phase-mean activations.
@@ -262,8 +291,11 @@ def main():
 
                 need_cosine  = "temporal_cosine"  not in ckpt_grp or args.overwrite
                 need_pearson = "temporal_pearson" not in ckpt_grp or args.overwrite
+                need_phase_pear = (
+                    f"layer_0_phase_1_pearson" not in ckpt_grp or args.overwrite
+                )
 
-                if not need_cosine and not need_pearson:
+                if not need_cosine and not need_pearson and not need_phase_pear:
                     n_skipped += 2
                     continue
 
@@ -323,6 +355,47 @@ def main():
                             "temporal_pearson", data=rdm_p,
                             compression="gzip", compression_opts=4, shuffle=True)
                         n_computed += 1
+
+                # Per-phase Pearson RDMs for each layer
+                for l in layers:
+                    need_pp = any(
+                        f"layer_{l}_phase_{p+1}_pearson" not in ckpt_grp
+                        for p in range(N_PHASES)
+                    ) or args.overwrite
+                    if not need_pp:
+                        continue
+
+                    if l == L:
+                        acts_l = acts_by_t
+                    else:
+                        acts_l = {}
+                        ok = True
+                        for t in range(T):
+                            lkey = f"layer_{l}_t_{t}"
+                            if lkey not in npz:
+                                ok = False
+                                break
+                            acts_l[t] = npz[lkey].astype(np.float32)
+                        if not ok:
+                            continue
+
+                    _, M_raw_l = build_temporal_matrices(acts_l, flag_pos)
+                    phase_rdms = compute_phase_pearson_rdms(M_raw_l)
+                    for p, rdm in enumerate(phase_rdms):
+                        dkey = f"layer_{l}_phase_{p+1}_pearson"
+                        if args.overwrite and dkey in ckpt_grp:
+                            del ckpt_grp[dkey]
+                        if dkey not in ckpt_grp:
+                            if rdm is None:
+                                ds = ckpt_grp.create_dataset(
+                                    dkey, data=np.array([], dtype=np.float32))
+                                ds.attrs["degenerate"] = True
+                                n_degen += 1
+                            else:
+                                ckpt_grp.create_dataset(
+                                    dkey, data=rdm,
+                                    compression="gzip", compression_opts=4, shuffle=True)
+                                n_computed += 1
 
             if (idx + 1) % 100 == 0:
                 print(f"  {idx + 1}/{n_total} runs processed ...", flush=True)

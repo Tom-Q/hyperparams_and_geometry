@@ -31,6 +31,9 @@ TABLES_DIR   = ANALYSIS_OUT / "tables"
 CACHE_DIR    = ANALYSIS_OUT / "cache"
 RDM_DIR      = ANALYSIS_OUT / "rdms"
 
+# Final thematic output directory (individual per-panel PNGs)
+FINAL_DIR = OUTPUT_DIR / "analysis_final"
+
 # Backwards-compat alias — scripts still being migrated may import this
 PRODUCTION_DIR = DATASET_DIR
 
@@ -154,9 +157,12 @@ def load_task_df(task_name: str, production_dir: Path = None) -> pd.DataFrame:
     meta         = task_meta()[task_name]
     cont_names   = meta["cont_param_names"]
 
+    from src.bo import _cont_params_for_task, _cont_to_unit_val
+    from tasks import TASKS
+    cont_params = _cont_params_for_task(TASKS[task_name]())
+
     rows = []
     for obs in observations:
-        # Q*bert bo_state entries don't have is_repeat / repeat_of / cont_unit_vals
         row = {
             "task":        task_name,
             "paradigm":    meta["paradigm"],
@@ -168,9 +174,12 @@ def load_task_df(task_name: str, production_dir: Path = None) -> pd.DataFrame:
         for k, v in obs["config"].items():
             row[k] = v
 
-        unit_vals = obs.get("cont_unit_vals", [])
-        for i, name in enumerate(cont_names):
-            row[f"unit_{name}"] = unit_vals[i] if i < len(unit_vals) else np.nan
+        unit_vals = obs.get("cont_unit_vals") or []
+        for i, (name, lo, hi) in enumerate(cont_params):
+            if i < len(unit_vals):
+                row[f"unit_{name}"] = unit_vals[i]
+            else:
+                row[f"unit_{name}"] = _cont_to_unit_val(obs["config"][name], lo, hi)
 
         rows.append(row)
 
@@ -270,6 +279,11 @@ def metric_output_dirs(metric: str) -> tuple[Path, Path]:
     """Return (figures_dir, tables_dir) for a specific RDM metric."""
     base = ANALYSIS_OUT / metric
     return base / "figures", base / "tables"
+
+
+def metric_suffix(metric: str) -> str:
+    """Return filename suffix for non-default metric ('_cosine' or '')."""
+    return "" if metric == "pearson" else f"_{metric}"
 
 
 def task_run_dir(task: str) -> Path:

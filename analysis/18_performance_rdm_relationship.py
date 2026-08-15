@@ -34,7 +34,7 @@ from scipy.stats import rankdata, spearmanr
 ANALYSIS  = Path(__file__).parent
 REPO_ROOT = ANALYSIS.parent
 sys.path.insert(0, str(ANALYSIS))
-from analysis_utils import (RDM_DIR, TABLES_DIR, FIGURES_DIR,
+from analysis_utils import (RDM_DIR, TABLES_DIR, FIGURES_DIR, FINAL_DIR,
                              RL_TASKS, TASK_NAMES, task_meta, get_depth)
 
 RNN_TASKS     = {"adding", "mnist_rnn"}
@@ -435,13 +435,18 @@ def main():
 
     fig_a, fig_b = make_figures(df)
 
+    pr_final = FINAL_DIR / "representational_geometry/figures/performance_rdm"
+    pr_final.mkdir(parents=True, exist_ok=True)
+
     out_a = FIGURES_DIR / "perf_rdm_within_bin.pdf"
     fig_a.savefig(out_a, bbox_inches="tight", dpi=130)
+    fig_a.savefig(pr_final / "perf_rdm_within_bin.png", dpi=200, bbox_inches="tight")
     plt.close(fig_a)
     print(f"Saved: {out_a.name}")
 
     out_b = FIGURES_DIR / "perf_rdm_hp_correlation.pdf"
     fig_b.savefig(out_b, bbox_inches="tight", dpi=130)
+    fig_b.savefig(pr_final / "perf_rdm_hp_correlation.png", dpi=200, bbox_inches="tight")
     plt.close(fig_b)
     print(f"Saved: {out_b.name}")
 

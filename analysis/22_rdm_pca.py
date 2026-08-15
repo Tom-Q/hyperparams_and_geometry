@@ -30,7 +30,7 @@ from sklearn.decomposition import PCA
 
 ANALYSIS = Path(__file__).parent
 sys.path.insert(0, str(ANALYSIS))
-from analysis_utils import RDM_DIR, TASK_NAMES, RL_TASKS, metric_output_dirs, get_depth
+from analysis_utils import RDM_DIR, TASK_NAMES, RL_TASKS, FINAL_DIR, metric_output_dirs, metric_suffix, get_depth
 
 RNN_TASKS = {"adding", "mnist_rnn"}
 NAN_TASKS = {"adding"}
@@ -359,6 +359,10 @@ def main():
     tasks_to_run = set(args.task) if args.task else set(TASK_NAMES)
     all_coord_rows = []
 
+    suf = metric_suffix(args.metric)
+    final_pca_dir = FINAL_DIR / "hp_effects/figures/rdm_pca"
+    final_pca_dir.mkdir(parents=True, exist_ok=True)
+
     pdf_path = out_figures / "f2_rdm_pca.pdf"
     with PdfPages(pdf_path) as pdf:
         for task in TASK_NAMES:
@@ -400,8 +404,11 @@ def main():
 
             fig = make_task_page(pca, coords, hp_df, task)
             pdf.savefig(fig, bbox_inches="tight")
+
+            out_png = final_pca_dir / f"rdm_pca_{task}{suf}.png"
+            fig.savefig(out_png, dpi=200, bbox_inches="tight")
             plt.close(fig)
-            print(f"    Page added to PDF.")
+            print(f"    Saved: {out_png.name}")
 
     print(f"\nSaved: {pdf_path}")
 

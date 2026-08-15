@@ -39,7 +39,8 @@ from scipy.spatial.distance import pdist, squareform
 REPO_ROOT   = Path(__file__).parent.parent
 ACT_DIR     = REPO_ROOT / "output" / "production" / "llm" / "activations"
 RDM_DIR     = REPO_ROOT / "output" / "analysis" / "rdms" / "llm"
-FIG_DIR     = REPO_ROOT / "output" / "analysis" / "figures" / "llm"
+FIG_DIR         = REPO_ROOT / "output" / "analysis" / "figures" / "llm"
+FINAL_LLM_RDM   = REPO_ROOT / "output" / "analysis_final" / "llm" / "figures" / "rdm_gallery"
 
 N_REQUEST = 128   # rows 0–127
 N_PASSAGE = 128   # rows 128–255
@@ -206,6 +207,8 @@ def make_gallery_pdf(
     pdf = pdf_backend.PdfPages(pdf_path)
     pdf.savefig(fig, dpi=150)
     pdf.close()
+    FINAL_LLM_RDM.mkdir(parents=True, exist_ok=True)
+    fig.savefig(FINAL_LLM_RDM / (pdf_path.stem + ".png"), dpi=200, bbox_inches="tight")
     plt.close(fig)
     print(f"[pdf] {pdf_path.name}")
 
