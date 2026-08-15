@@ -118,7 +118,10 @@ def load_crystallization_data(task, metric):
                 vec = load_rdm_vec(cg, lkey)
                 if vec is None:
                     continue
-                r, _ = spearmanr(vec, ref_vec)
+                mask = np.isfinite(vec) & np.isfinite(ref_vec)
+                if mask.sum() < 10:
+                    continue
+                r = float(spearmanr(vec[mask], ref_vec[mask])[0])
                 rows.append({
                     "task":       task,
                     "run_id":     run_id,

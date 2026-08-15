@@ -80,10 +80,13 @@ def process_network(run_dir, task, bo_perf):
     if final_acts is None:
         return None
 
-    # Collect all step checkpoints, sorted ascending
+    # Collect all step checkpoints, sorted ascending.
+    # Prefer the env-step count stored inside the npz (qbert uses gradient-update
+    # counts in filenames but env steps in final_step and the npz "step" field).
     step_ckpts = {}
     for npz in run_dir.glob("step_*.npz"):
-        step = int(npz.stem.replace("step_", ""))
+        with np.load(npz) as _d:
+            step = int(_d["step"]) if "step" in _d.files else int(npz.stem.replace("step_", ""))
         step_ckpts[step] = npz
 
     if not step_ckpts:

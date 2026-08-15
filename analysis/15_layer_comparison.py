@@ -501,7 +501,12 @@ def _bar_layers(ax, models, medians_by_layer, q25_by_layer, q75_by_layer, n_nets
 def _within_violin_pairs(ax, within_by_pair):
     """Violin per layer pair."""
     pairs = sorted(within_by_pair.keys())
-    valid = [(p, within_by_pair[p]) for p in pairs if len(within_by_pair[p]) >= 3]
+    valid = []
+    for p in pairs:
+        arr = within_by_pair[p]
+        arr = arr[np.isfinite(arr)]
+        if len(arr) >= 3:
+            valid.append((p, arr))
     if not valid:
         ax.text(0.5, 0.5, "no data", ha="center", va="center", transform=ax.transAxes)
         return

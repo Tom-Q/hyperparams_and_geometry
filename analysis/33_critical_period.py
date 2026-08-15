@@ -82,9 +82,11 @@ def collect_checkpoints(run_dir, task, meta):
     final_step = meta["final_step"]
     ckpts = {}
 
-    # Step checkpoints — step encoded in filename
+    # Step checkpoints — prefer env-step from inside the npz (qbert stores
+    # gradient-update counts in filenames but env steps in the "step" field).
     for npz in run_dir.glob("step_*.npz"):
-        step = int(npz.stem.replace("step_", ""))
+        with np.load(npz) as _d:
+            step = int(_d["step"]) if "step" in _d.files else int(npz.stem.replace("step_", ""))
         ckpts[step] = npz
 
     # Final checkpoint
